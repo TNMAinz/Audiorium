@@ -1,0 +1,30 @@
+[package]
+name = "audiorium"
+version = "1.1.2"
+description = "A local-first audio observatory"
+authors = ["AUDIORIUM contributors"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "flac", "wav", "pcm", "ogg", "vorbis", "isomp4", "aac", "alac"] }
+tauri = { version = "2", features = ["tray-icon"] }
+
+[target."cfg(windows)".dependencies]
+wasapi = "=0.26.0"
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_Security",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Threading",
+  "Win32_System_Variant",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }

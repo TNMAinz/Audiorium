@@ -1,0 +1,25 @@
+# Build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+driver/build/
+
+# Tooling
+__pycache__/
+*.pyc
+
+# Machine state and logs
+*.log
+tsconfig.tsbuildinfo
+.vm/
+.unlazy/
+.shots/
+.toolchain-installer/
+.freebuff/
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
