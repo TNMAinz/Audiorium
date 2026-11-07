@@ -223,5 +223,4 @@ matters:
 Issues and pull requests are welcome. Two things make a patch easy to take: the
 tests above still pass, and the app still tells the truth about what it is doing
 — every reading it shows should come from the engine rather than from the
-interface's imagination. Version bumps follow the rule in [AGENTS.md](AGENTS.md):
-no part counts past nine, so `1.0.9` is followed by `1.1.0`.
+interface's imagination.
