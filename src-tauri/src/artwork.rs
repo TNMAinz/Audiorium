@@ -53,9 +53,27 @@ fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(output.into_inner())
 }
 
-fn embedded(path: &Path) -> Option<Vec<u8>> {
+fn extension(path: &Path) -> String {
+    path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase()
+}
+
+/// A WAV's own cover: the APIC frame of the ID3v2 tag the exporter writes, because
+/// RIFF has no chunk for a picture. The tag sits before `data`, so the head is enough.
+fn riff_cover(path: &Path) -> Option<Vec<u8>> {
+    let mut head = Vec::new();
+    File::open(path).ok()?.take(READ_BUDGET as u64).read_to_end(&mut head).ok()?;
+    crate::library::id3v2_picture(crate::library::riff_id3(&head)?)
+}
+
+/// The cover exactly as the file carries it, with what that data is.
+fn cover_visual(path: &Path) -> Option<(Vec<u8>, String)> {
+    if !std::fs::metadata(path).ok()?.is_file() { return None; }
+    if extension(path) == "wav" {
+        if let Some(bytes) = riff_cover(path) {
+            return Some((bytes.clone(), crate::export::sniff_mime(&bytes).to_string()));
+        }
+    }
     let file = File::open(path).ok()?;
-    if !file.metadata().ok()?.is_file() { return None; }
     let stream = MediaSourceStream::new(Box::new(BoundedSource { file, remaining: READ_BUDGET }), Default::default());
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) { hint.with_extension(ext); }
@@ -66,18 +84,32 @@ fn embedded(path: &Path) -> Option<Vec<u8>> {
     // Some containers keep pictures in their own metadata, others in a leading ID3 tag.
     if let Some(revision) = probe.format.metadata().current() {
         if let Some(visual) = cover_in(revision) {
-            if let Some(png) = thumbnail(&visual.data) { return Some(png); }
+            return Some((visual.data.to_vec(), visual.media_type.clone()));
         }
     }
     if let Some(metadata) = probe.metadata.get() {
         if let Some(revision) = metadata.current() {
-            if let Some(visual) = cover_in(revision) { return thumbnail(&visual.data); }
+            if let Some(visual) = cover_in(revision) {
+                return Some((visual.data.to_vec(), visual.media_type.clone()));
+            }
         }
     }
     None
 }
 
-fn load(root: &str, path: &str) -> Result<Vec<u8>, String> {
+fn embedded(path: &Path) -> Option<Vec<u8>> {
+    cover_visual(path).and_then(|(bytes, _)| thumbnail(&bytes))
+}
+
+/// The cover as the source stores it, for a master to carry unchanged: no thumbnail,
+/// no re-encode. An unreadable or oversized picture is nothing, not an error.
+pub(crate) fn original_cover(path: &Path) -> (Vec<u8>, String) {
+    cover_visual(path)
+        .filter(|(bytes, _)| !bytes.is_empty() && bytes.len() <= MAX_COVER)
+        .unwrap_or_default()
+}
+
+pub(crate) fn load(root: &str, path: &str) -> Result<Vec<u8>, String> {
     let root = Path::new(root).canonicalize().map_err(|_| "The library folder is unavailable".to_string())?;
     let path = Path::new(path).canonicalize().map_err(|_| "That music file is unavailable".to_string())?;
     if !root.is_dir() || !path.starts_with(&root) || !path.is_file() {

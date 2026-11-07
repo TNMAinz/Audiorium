@@ -109,6 +109,14 @@ pub struct PlayerState {
     /// Written by the playback thread, polled by the interface.
     analysis: Arc<AnalysisState>,
     volume: Arc<AtomicU32>,
+    /// A gain for comparing two files, not the user's level: a level-matched A/B
+    /// has to even out two loudnesses without moving the fader under the user, and
+    /// has to be able to put the comparison away without leaving the change behind.
+    monitor: Arc<AtomicU32>,
+    /// Whether the comparison is hearing the files themselves. A master already
+    /// contains the rack, so playing it through the rack again would compare a
+    /// twice-processed file with a once-processed one.
+    direct: Arc<AtomicBool>,
 }
 struct Engine {
     thread: Option<JoinHandle<()>>,
@@ -130,6 +138,8 @@ impl PlayerState {
             chain,
             analysis,
             volume: Arc::new(AtomicU32::new(0.7f32.to_bits())),
+            monitor: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            direct: Arc::new(AtomicBool::new(false)),
         }
     }
     pub fn status(&self) -> PlaybackStatus {
@@ -336,6 +346,25 @@ fn open_stream(path: &Path) -> Result<symphonia::core::probe::ProbeResult, Strin
             &MetadataOptions::default(),
         )
         .map_err(|error| format!("This file cannot be decoded: {error}"))
+}
+
+/// Decodes a whole file at the engine rate, handing each converted block to the
+/// sink and stopping when it returns false or the render asks to cancel. The
+/// master page is the caller: it wants the same decoder and the same resampler
+/// playback uses, without an output device in the way.
+pub fn decode(
+    path: &Path,
+    sink: &mut dyn FnMut(&[[f32; 2]]) -> bool,
+) -> Result<(), String> {
+    let mut reader = Reader::open(path, 0.0)?;
+    reader.run(&mut |block| {
+        if sink(block) {
+            Control::Continue
+        } else {
+            Control::Stop
+        }
+    })?;
+    Ok(())
 }
 
 /// Probes a file without opening the output, so unsupported files fail at once.
@@ -617,6 +646,7 @@ impl Processor {
         &mut self,
         input: [f32; 2],
         target: f32,
+        direct: bool,
         spatial: SpatialConfig,
         config: &ChainConfig,
     ) -> [f32; 2] {
@@ -625,6 +655,12 @@ impl Processor {
             input[0] * self.smooth_volume,
             input[1] * self.smooth_volume,
         ];
+        // A comparison hears the two files, not the rack twice: the master already
+        // contains it, so the source is what the rack would make of it and the
+        // master is what that produced.
+        if direct {
+            return placed;
+        }
         let processed = self.chain.process(placed, spatial, config);
         [
             processed[0].clamp(-1.0, 1.0),
@@ -681,6 +717,8 @@ fn run_engine(
     chain_state: Arc<ChainState>,
     analysis: Arc<AnalysisState>,
     volume: Arc<AtomicU32>,
+    monitor: Arc<AtomicU32>,
+    direct: Arc<AtomicBool>,
     start_at: f64,
     ready: mpsc::SyncSender<Result<(), String>>,
 ) {
@@ -709,6 +747,8 @@ fn run_engine(
                 chain_state,
                 analysis,
                 volume,
+                monitor,
+                direct,
                 start_at,
                 ready,
                 device_name,
@@ -820,8 +860,10 @@ fn run_engine(
             .enumerate()
         {
             let frame = local.get(index).copied().unwrap_or([0.0; 2]);
-            let target = f32::from_bits(volume.load(Ordering::Relaxed));
-            let output = processor.frame(frame, target, current, &chain_config);
+            let target = f32::from_bits(volume.load(Ordering::Relaxed))
+                * f32::from_bits(monitor.load(Ordering::Relaxed));
+            let output =
+                processor.frame(frame, target, direct.load(Ordering::Relaxed), current, &chain_config);
             // A paused stream is still flushing silence to the device. That is not a
             // measurement of anything, and feeding it to the meter would drag the last
             // window down to the floor before the pause could be held.
@@ -898,6 +940,8 @@ fn run_spatial_engine(
     chain_state: Arc<ChainState>,
     analysis: Arc<AnalysisState>,
     volume: Arc<AtomicU32>,
+    monitor: Arc<AtomicU32>,
+    direct: Arc<AtomicBool>,
     start_at: f64,
     ready: mpsc::SyncSender<Result<(), String>>,
     device_name: String,
@@ -964,7 +1008,8 @@ fn run_spatial_engine(
         };
         let paused = shared.paused.load(Ordering::Relaxed);
         let chain_config = chain_state.effective();
-        let gain = f32::from_bits(volume.load(Ordering::Relaxed));
+        let gain = f32::from_bits(volume.load(Ordering::Relaxed))
+            * f32::from_bits(monitor.load(Ordering::Relaxed));
         local.clear();
         if !paused {
             if let Ok(mut ring) = shared.ring.lock() {
@@ -980,7 +1025,13 @@ fn run_spatial_engine(
         feeds.clear();
         for index in 0..frames {
             let input = local.get(index).copied().unwrap_or([0.0; 2]);
-            let output = processor.frame(input, gain, track_spatial, &chain_config);
+            let output = processor.frame(
+                input,
+                gain,
+                direct.load(Ordering::Relaxed),
+                track_spatial,
+                &chain_config,
+            );
             // The reverb and limiter still run on the padded silence, so a tail
             // rings out instead of stopping at the last decoded frame.
             if !paused {
@@ -1109,6 +1160,8 @@ fn start_track(
     let chain = state.chain.clone();
     let analysis = state.analysis.clone();
     let volume = state.volume.clone();
+    let monitor = state.monitor.clone();
+    let direct = state.direct.clone();
     let engine_shared = shared.clone();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let handle = thread::spawn(move || {
@@ -1120,6 +1173,8 @@ fn start_track(
             chain,
             analysis,
             volume,
+            monitor,
+            direct,
             start_at,
             ready_tx,
         )
@@ -1240,6 +1295,32 @@ pub fn set_playback_volume(state: tauri::State<'_, PlayerState>, volume: f32) ->
     }
     state.volume.store(volume.to_bits(), Ordering::Relaxed);
     Ok(())
+}
+
+/// What a monitor trim in dB is as a linear gain. Attenuation only: a comparison that
+/// had to add gain would be a comparison that could clip.
+fn monitor_gain(db: f32) -> Result<f32, String> {
+    if !db.is_finite() || !(-24.0..=0.0).contains(&db) {
+        return Err("A monitor trim must be between -24 and 0 dB".into());
+    }
+    Ok(10f32.powf(db / 20.0))
+}
+
+/// A gain for a level-matched comparison, applied on top of the user's level and
+/// never written to it.
+#[tauri::command]
+pub fn set_monitor_trim(state: tauri::State<'_, PlayerState>, db: f32) -> Result<(), String> {
+    let gain = monitor_gain(db)?;
+    state.monitor.store(gain.to_bits(), Ordering::Relaxed);
+    Ok(())
+}
+
+/// Hear the files themselves for a comparison. The master already carries the rack,
+/// so a comparison through it would judge a twice-processed file against a once
+/// processed one; this is a listening aid, not a setting, and it is off by default.
+#[tauri::command]
+pub fn set_monitor_direct(state: tauri::State<'_, PlayerState>, direct: bool) {
+    state.direct.store(direct, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -1608,4 +1689,17 @@ mod tests {
         }
         assert_eq!(shared.ring.lock().unwrap().len(), RING_FRAMES);
     }
+    #[test]
+    fn a_monitor_trim_only_ever_attenuates() {
+        // -6 dB is half the level, and the comparison is level-matched by pulling the
+        // louder file down, never by pushing the quieter one up into the ceiling.
+        assert!((monitor_gain(0.0).unwrap() - 1.0).abs() < 1e-6);
+        assert!((monitor_gain(-6.0).unwrap() - 0.501_187).abs() < 1e-4);
+        assert!((monitor_gain(-24.0).unwrap() - 0.063_095_7).abs() < 1e-6);
+        assert!(monitor_gain(0.5).is_err(), "a positive trim was accepted");
+        assert!(monitor_gain(-25.0).is_err(), "a trim below the range was accepted");
+        assert!(monitor_gain(f32::NAN).is_err(), "a non-finite trim was accepted");
+    }
+
+
 }

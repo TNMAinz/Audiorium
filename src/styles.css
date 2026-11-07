@@ -1146,11 +1146,15 @@ select:disabled { opacity: .55; }
 
 
 /* ---------- processors page ---------- */
-/* The rack is a signal path, not a card deck: three numbered stages in the order
-   the audio passes through them, each one a plate, its controls and the engine's
-   own figures in a readout plate, with the meter bridge closing the path. */
+/* The rack is a signal path, not a card deck: six numbered stages in the order
+   the audio passes through them — and in whichever order the user puts them — each
+   one a plate, its controls and the engine's own figures in a readout plate, with
+   the meter bridge closing the path. */
 .processors-grid { grid-template-columns: minmax(0, 1fr); align-content: start; }
-.rack-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* The rack is measured by its own width, not the window's. The sidebar and the inspector
+   take a fixed share, so a 760 px window leaves a 412 px rack and the viewport's own
+   breakpoints never fire while the strips inside are already too narrow. */
+.rack-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; container-type: inline-size; }
 .rack-body > .audio-warning, .rack-body > .audio-error { margin: 0; }
 
 .rack-stages { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
@@ -1170,6 +1174,13 @@ select:disabled { opacity: .55; }
 .stage-power:hover { border-color: #2c3644; color: #cfdcf2; }
 .stage-power.on { color: #dff6ea; border-color: #2d4a40; }
 .stage-power.on i { background: #7ef0c0; box-shadow: 0 0 6px rgba(126, 240, 192, .7); }
+/* Moving a stage is two presses — earlier and later in the path — so it can be done
+   from the keyboard and never fights the page's own scroll. The pair holds the right
+   end of the plate line, and the stage's switch sits beside it. */
+.stage-move { display: flex; flex: none; gap: 2px; margin-left: auto; }
+.stage-move .icon-button { width: 22px; height: 22px; }
+.stage-move .icon-button:disabled { opacity: .3; }
+.stage-move + .stage-power { margin-left: 4px; }
 
 /* Every stage reads the same way at every width: the controls take the width and
    the engine's figures run as one band under them, so the three stages stay the
@@ -1191,6 +1202,18 @@ select:disabled { opacity: .55; }
    Two cells a row keeps every group centred and paired; a wide page gives each one
    its own column, so the strip fills its width instead of bunching at the left. */
 .stage-controls.limiter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-items: center; align-items: start; gap: 12px 18px; }
+/* Six dials and a meter: three to a row while the page is narrow, all six in one
+   row once there is width for them, so the strip stays a row of controls. */
+.stage-controls.compressor { display: grid; grid-template-columns: minmax(0, 1fr); }
+.stage-controls.compressor .stage-knobs, .stage-controls.saturator .stage-knobs { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
+@media (min-width: 1200px) {
+  .stage-controls.compressor .stage-knobs { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+.stage-readout .gr-meter { flex: 1 1 190px; min-width: 160px; }
+/* The equaliser's bands live on their own page; this strip is its place in the path,
+   the figures it is holding and one way through to the editor. */
+.stage-controls.eq-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.stage-controls.eq-summary .stage-readout { flex: 1; }
 @media (min-width: 1200px) {
   .stage-controls.limiter { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
@@ -1368,6 +1391,39 @@ select:disabled { opacity: .55; }
   .pad-cell { max-width: 280px; }
 }
 
+/* A rack narrower than 560 px stacks what cannot share a row, so no strip is cut and no
+   control is pushed outside the window; the same shapes as the 520 px window rule, which
+   could not fire inside a wide window with narrow rails. */
+@container (max-width: 560px) {
+  .stage-controls.panner { grid-template-columns: minmax(0, 1fr); grid-template-areas: "pad" "knobs" "footer"; }
+  .stage-controls.panner .stage-knobs { grid-template-columns: repeat(2, minmax(76px, 1fr)); }
+  .panner-footer { flex-wrap: wrap; }
+  .panner-footer > .toggle-line { margin-left: 0; }
+  .stage-controls.room { grid-template-columns: minmax(0, 1fr); }
+  .stage-controls.room .stage-knobs { grid-template-columns: repeat(3, minmax(70px, 1fr)); }
+  .stage-controls.limiter { grid-template-columns: minmax(0, 1fr); }
+  .stage-controls.compressor .stage-knobs, .stage-controls.saturator .stage-knobs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage-readout .tap-strip { flex-basis: 100%; max-width: none; margin-left: 0; }
+  .pad-cell { max-width: 280px; }
+}
+
+/* A rack this narrow cannot hold a stage's name beside its three buttons, or five
+   words in one bank: the plate line takes two rows and the bank wraps its options,
+   so nothing is squeezed to a sliver or pushed out of the window. */
+@container (max-width: 440px) {
+  .stage-head { flex-wrap: wrap; row-gap: 6px; }
+  .stage-name { flex: 1 1 auto; min-width: min-content; }
+  .segmented { flex-wrap: wrap; }
+  .routing { flex-wrap: wrap; }
+  .stage-controls.room .stage-knobs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage-controls.eq-summary { flex-wrap: wrap; }
+  .panner-footer > .rack-label, .limiter-flags .rack-label, .seg-field .rack-label { white-space: normal; }
+  /* One figure a row rather than a figure cut off: the dd shortens with a title. */
+  .spec-list { gap: 4px 14px; }
+  .spec-list > div { max-width: 100%; min-width: 0; }
+  .spec-list dd { flex: 0 1 auto; min-width: 0; }
+}
+
 /* ---------- the equaliser ---------- */
 .eq-card { gap: 9px; }
 .eq-card .panel-heading { gap: 12px; }
@@ -1533,3 +1589,196 @@ select:disabled { opacity: .55; }
   .eq-patch-select { width: 132px; }
   .eq-patch-action { padding: 0 7px; }
 }
+
+/* ---------- the master page ---------- */
+/* One screen of four tools: the source and the picture on the left, the export
+   and the pair it measured on the right. Every card is the height its row gives
+   it and the picture inside takes what is left, so the page itself never needs
+   to scroll at the sizes the window opens at. */
+.master-grid {
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: 'source export' 'file before';
+}
+.master-grid > .page-card { min-height: 0; overflow: hidden; }
+.master-source-card { grid-area: source; }
+.master-export-card { grid-area: export; }
+.master-before-card { grid-area: before; }
+.master-file-card { grid-area: file; }
+/* The list takes the height the card has left, so a hundred tracks scroll under
+   the hairline rail instead of pushing the reference picker off the panel. */
+.master-source-list { flex: 1; min-height: 0; max-height: none; }
+.master-hint { margin: 10px 0 0; font-size: var(--fs-micro); color: #8b9ab4; }
+.master-source-list .scroll-view { display: grid; align-content: start; gap: 1px; }
+/* A track is a row to pick, not a transport: title and format on one line, the
+   rest under it, and the chosen one marked by the same lit edge the rack uses. */
+.master-track {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline;
+  gap: 2px 10px; width: 100%; padding: 7px 6px; border: 0;
+  border-bottom: 1px solid var(--line-soft); background: none; text-align: left;
+}
+.master-track:hover { background: rgb(var(--lit-rgb) / .05); }
+.master-track[aria-current='true'] { background: rgb(var(--lit-rgb) / .08); box-shadow: inset 2px 0 0 var(--accent); }
+.master-track-title { min-width: 0; font-size: var(--fs-sm); color: #dde6f4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.master-track[aria-current='true'] .master-track-title { color: #f2f7ff; }
+.master-track-format { flex: none; font-size: var(--fs-micro); color: #8b9ab4; white-space: nowrap; }
+.master-track-meta {
+  grid-column: 1 / -1; min-width: 0; font-size: var(--fs-micro); color: #8494b0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Depth switch, Render, Cancel and Hear in one row; a narrow panel wraps them
+   under each other rather than cutting a label to a stub. */
+.master-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 0; }
+.master-actions .page-button { padding: 5px 9px; }
+/* Where the file goes, in the engine's own path form: one line, ellipsized, and
+   the whole path is in its title. */
+.master-path { margin: 8px 0 0; font-size: var(--fs-micro); color: #9fb0c8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.master-progress { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.master-progress .meter-fill { transition: width 120ms linear; }
+.master-progress-line { display: flex; justify-content: space-between; gap: 10px; font-size: var(--fs-micro); color: #8b9ab4; }
+.master-progress-line span:last-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The delivery target and its verdict, on one line above the table they judge: the
+   switch is the choice, the text is the answer, and a miss says how far and which way. */
+.master-spec { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin: 8px 0 0; }
+.master-verdict { font-size: var(--fs-micro); color: #8b9ab4; }
+.master-verdict.ok { color: #a9dfbc; }
+.master-verdict.off { color: #f0bc92; }
+/* The gain a level-matched comparison is being heard at, beside the switch that set it. */
+.master-trim { font-family: var(--font-mono); font-size: var(--fs-micro); color: #8b9ab4; white-space: nowrap; }
+/* Before and after, in columns: the label first and the same figure under it, so
+   a source level and the level it was mastered to are read across, not remembered. */
+.master-measurements { width: 100%; margin: 6px 0 0; border-collapse: collapse; }
+.master-measurements th, .master-measurements td { padding: 3px 0; border-bottom: 1px solid var(--line-soft); text-align: right; }
+.master-measurements thead th { font-size: var(--fs-micro); font-weight: 400; letter-spacing: .05em; color: #7d8ba2; }
+.master-measurements th:first-child { width: 44%; padding-right: 10px; text-align: left; font-size: var(--fs-sm); font-weight: 400; color: #8b99b8; }
+.master-measurements tbody td { width: 28%; font-size: var(--fs-micro); color: #dbe6f8; font-variant-numeric: tabular-nums; }
+.master-measurements tbody tr:last-child th, .master-measurements tbody tr:last-child td { border-bottom: 0; }
+@media (max-width: 1000px) {
+  /* Two cards side by side no longer have the width to hold a switch and its
+     reading, so the page becomes one column and scrolls under its rail. */
+  .master-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas: 'source' 'export' 'file' 'before';
+    grid-auto-rows: min-content;
+    flex: 0 0 auto;
+  }
+  /* Stacked, the list keeps a window of its own instead of growing the page by
+     however many tracks were scanned. */
+  .master-source-list { max-height: 220px; }
+  .master-file-card .file-scan { min-height: 220px; }
+}
+/* A narrower column trims the table's own air before anything has to give: the
+   six figures still fit beside the target and its verdict. */
+@media (max-width: 1100px) {
+  .master-measurements th, .master-measurements td { padding: 2px 0; }
+}
+/* At a narrow two-column width each card is about 230 px: the progress line drops
+   the file name the heading already implies, so the export column still holds a
+   finished album without scrolling. */
+@media (min-width: 1001px) and (max-width: 1150px) {
+  .master-progress-line span:last-child { display: none; }
+  /* The comparison still runs; its gain is the switch's title at this width where
+     it would otherwise take a row of its own. */
+  .master-export-card .master-trim { display: none; }
+  /* A 230 px card fits two switches on a line only with tighter buttons and no
+     wrapping inside one, and an export that has finished still has to sit above
+     the album rows. */
+  .master-export-card .master-actions .segmented { flex-wrap: nowrap; }
+  .master-export-card .master-actions .segmented button { padding: 3px 4px; }
+  /* The measured pair has the same width to work with: the table gives up its
+     padding and the verdict says what the gain is without repeating the target,
+     which the switch above it already names. */
+  .master-before-card .master-measurements th,
+  .master-before-card .master-measurements td { padding: 0; }
+  .master-trim-target { display: none; }
+}
+/* A short window trims the frame before it trims a reading: the same cards, less
+   air between the rows. */
+@media (max-height: 780px) {
+  .master-grid > .page-card { padding: 12px; }
+  .master-actions { margin-top: 6px; gap: 6px; }
+  .master-spec { margin-top: 6px; }
+  .master-measurements { margin-top: 4px; }
+  .master-measurements th, .master-measurements td { padding: 2px 0; }
+}
+@media (max-width: 520px) {
+  .master-measurements th:first-child { width: 40%; }
+  .master-actions .segmented { width: 100%; }
+  .master-actions .segmented button { flex: 1; }
+}
+
+/* The channel mode is the rack's own switch, not a stage: it decides which two
+   signals every stage after it is given. One line above the strips, so the order
+   below still reads as the signal's path. */
+.rack-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 8px; }
+.rack-mode-note { font-size: var(--fs-micro); color: #8b9ab4; }
+/* A dynamic band says so in the editor and in the row, so a band that gives way
+   is never mistaken for one that does not. */
+.eq-dynamics-toggle.on { border-color: rgb(var(--lit-rgb) / .5); color: #f2f7ff; background: rgb(var(--lit-rgb) / .1); }
+.eq-row-dyn { flex: none; font-size: var(--fs-micro); letter-spacing: .04em; color: #f0bc92; }
+
+/* The reference is a picker, not a second source list: one line in the source
+   card, and the figure it measured under it. */
+.master-reference-pick { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; font-size: var(--fs-micro); color: #8b9ab4; }
+.master-reference-pick select {
+  flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid var(--line-soft);
+  border-radius: 4px; background: rgb(8 12 20 / .6); color: #dbe6f8; font-size: var(--fs-micro);
+}
+.master-reference-line { margin: 6px 0 0; font-size: var(--fs-micro); color: #9fb0c8; }
+.master-reference-compare { margin: 8px 0 0; font-size: var(--fs-micro); color: #9fb0c8; }
+
+/* An album is one row: what it is, how many tracks, and the one button that
+   writes them all. The verdict is the programme's, not a track's. */
+/* The album rows close the export card: what is a sequence, and one button that
+   writes it as one. */
+.master-albums { display: grid; gap: 1px; margin: 8px 0 0; padding-top: 2px; border-top: 1px solid var(--line-soft); }
+.master-album {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
+  gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line-soft);
+}
+.master-album:last-child { border-bottom: 0; }
+.master-album-name { min-width: 0; font-size: var(--fs-sm); color: #dde6f4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.master-album-count { font-size: var(--fs-micro); color: #8b9ab4; white-space: nowrap; }
+.master-null { font-family: var(--font-mono); font-size: var(--fs-micro); }
+.master-null.ok { color: #a9dfbc; }
+.master-null.off { color: #f0bc92; }
+
+/* The whole file, in three registers: peaks, loudness, spectrum. The widths are
+   the panel's, the drawings stretch to it, and every one of them is one picture
+   of the same timeline. */
+.file-scan { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 5px; margin: 8px 0 0; }
+.file-scan-legend { flex: none; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; font-size: var(--fs-micro); color: #8b9ab4; }
+/* The timeline is wider than the card on purpose: the file is drawn at a
+   readable column width and moved sideways, so a four-minute file is inspected
+   a few seconds at a time instead of being squashed into one card width. The
+   native gutter is hidden and a 3 px rail in the panel's own language reports
+   where the view sits. */
+.file-scan-track { flex: 1; min-height: 0; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.file-scan-track::-webkit-scrollbar { display: none; }
+.file-scan-track.scrollable { cursor: grab; }
+.file-scan-track.scrollable:active { cursor: grabbing; }
+.file-scan-track:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.file-scan-time { height: 100%; min-width: 100%; display: flex; flex-direction: column; gap: 5px; }
+.file-scan-rail { flex: none; position: relative; height: 3px; margin-top: 2px; border-radius: 2px; background: rgb(var(--rim-rgb) / .12); }
+.file-scan-rail i { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--accent); opacity: .45; transition: opacity .15s ease; }
+.file-scan:hover .file-scan-rail i, .file-scan-track:focus-visible ~ .file-scan-rail i { opacity: .85; }
+/* Every register is one picture of the same timeline: the plots divide the
+   height the card has left instead of claiming a fixed one, so the card can
+   shrink to its row without cutting anything off. */
+.file-scan-plot { position: relative; flex: 1 1 0; min-height: 30px; }
+.file-scan-plot > svg, .file-scan-plot > canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.file-scan-keys { display: flex; gap: 10px; }
+.file-scan-keys span::before {
+  content: ''; display: inline-block; width: 8px; height: 2px; margin-right: 5px;
+  vertical-align: middle; background: var(--accent); opacity: .8;
+}
+.file-scan-keys span:nth-child(2)::before { background: #f0bc92; }
+.file-scan-keys span:nth-child(3)::before { background: #7fb6ff; opacity: .5; }
+.file-scan-wave { flex: 1.4 1 0; }
+.file-scan-loudness { flex: 1 1 0; }
+.file-scan-spectrum { flex: 1.2 1 0; }
+.file-scan-axis { stroke: var(--line-soft); stroke-width: 1; }
+.file-scan-wave-fill { fill: rgb(var(--lit-rgb) / .28); stroke: var(--accent); stroke-width: 1; }
+.file-scan-loudness-line { fill: none; stroke: #f0bc92; stroke-width: 1.4; }
+.file-scan-spectrum > canvas { image-rendering: pixelated; border-radius: 3px; }

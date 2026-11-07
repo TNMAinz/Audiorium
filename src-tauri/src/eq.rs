@@ -50,6 +50,37 @@ impl EqKind {
     }
 }
 
+/// What turns a band into a dynamic one: its own level, above a threshold, pulls
+/// the band's contribution back towards a straight wire.
+///
+/// This is frequency-dependent compression the way a mastering engineer means it:
+/// the boost or cut is static until the band is loud, so a quiet verse keeps the
+/// shape and a loud chorus does not get it doubled. The detector reads the band's
+/// own output, so a loud kick does not duck the treble.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Dynamics {
+    /// The band's level where it starts to give way, in dBFS.
+    pub threshold_db: f32,
+    /// How far past the threshold the band's contribution is pulled back, as a ratio.
+    pub ratio: f32,
+    /// Time to reach 90 % of a new response, in milliseconds.
+    pub attack_ms: f32,
+    /// Time to give it back, in milliseconds.
+    pub release_ms: f32,
+}
+
+impl Default for Dynamics {
+    fn default() -> Self {
+        Self {
+            threshold_db: -24.0,
+            ratio: 3.0,
+            attack_ms: 10.0,
+            release_ms: 200.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EqFilter {
@@ -60,6 +91,10 @@ pub struct EqFilter {
     pub gain_db: f32,
     pub q: f32,
     pub enabled: bool,
+    /// Absent on a static band, which is every band a file written before dynamic
+    /// bands existed carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<Dynamics>,
 }
 
 impl EqFilter {
@@ -125,6 +160,29 @@ pub fn validate(config: &EqConfig) -> Result<(), String> {
         }
         if !filter.q.is_finite() || !(Q_MIN..=Q_MAX).contains(&filter.q) {
             return Err(format!("Band {band} Q must be between {Q_MIN} and {Q_MAX}"));
+        }
+        if let Some(dynamics) = filter.dynamics {
+            if !dynamics.threshold_db.is_finite()
+                || !(-60.0..=0.0).contains(&dynamics.threshold_db)
+            {
+                return Err(format!(
+                    "Band {band} dynamics threshold must be between -60 and 0 dBFS"
+                ));
+            }
+            if !dynamics.ratio.is_finite() || !(1.0..=20.0).contains(&dynamics.ratio) {
+                return Err(format!("Band {band} dynamics ratio must be between 1:1 and 20:1"));
+            }
+            if !dynamics.attack_ms.is_finite() || !(0.5..=200.0).contains(&dynamics.attack_ms) {
+                return Err(format!(
+                    "Band {band} dynamics attack must be between 0.5 and 200 ms"
+                ));
+            }
+            if !dynamics.release_ms.is_finite() || !(10.0..=2000.0).contains(&dynamics.release_ms)
+            {
+                return Err(format!(
+                    "Band {band} dynamics release must be between 10 and 2000 ms"
+                ));
+            }
         }
     }
     Ok(())
@@ -245,11 +303,82 @@ impl Channel {
     }
 }
 
+/// A one-pole reaches 90 % of a step after 2.303 time constants, so the attack and
+/// release controls mean "time to 90 %".
+const NINETY_PERCENT: f32 = 2.302_585;
+/// The band's dynamic gain may not move faster than this per sample (960 dB/s),
+/// so a control moved under a loud band cannot put a step in the waveform.
+const MAX_GAIN_STEP_DB: f32 = 0.02;
+
+fn coefficient(time_ms: f32) -> f32 {
+    let seconds = (time_ms / 1000.0).clamp(0.000_5, 2.0);
+    (1.0 - (-NINETY_PERCENT / (RATE * seconds)).exp()).clamp(1e-6, 1.0)
+}
+
+/// How much of the band's contribution survives at a given band level: 1 below the
+/// threshold, falling by the ratio above it. The reduction is expressed the way a
+/// compressor's is — decibels past the threshold divided by the ratio — and then
+/// turned into the fraction of the band that is left.
+fn dynamic_share(level_db: f32, dynamics: &Dynamics) -> f32 {
+    if !level_db.is_finite() || level_db <= dynamics.threshold_db {
+        return 1.0;
+    }
+    let over = level_db - dynamics.threshold_db;
+    let reduction = over * (1.0 - 1.0 / dynamics.ratio);
+    10f32.powf(-reduction / 20.0).clamp(0.0, 1.0)
+}
+
 #[derive(Clone, Debug)]
 struct Stage {
     biquad: Biquad,
     left: Channel,
     right: Channel,
+    /// Absent on a static band: the stage is then the biquad and nothing else.
+    dynamics: Option<Dynamics>,
+    /// The band's own envelope, linear, and the share of the band it currently keeps.
+    level: f32,
+    share: f32,
+}
+
+impl Stage {
+    fn new(filter: &EqFilter) -> Self {
+        Self {
+            biquad: Biquad::new(filter.kind, filter.frequency, filter.gain_db, filter.q),
+            left: Channel::default(),
+            right: Channel::default(),
+            dynamics: filter.dynamics,
+            level: 0.0,
+            share: 1.0,
+        }
+    }
+
+    fn process(&mut self, frame: [f32; 2]) -> [f32; 2] {
+        let left = self.left.step(&self.biquad, frame[0]);
+        let right = self.right.step(&self.biquad, frame[1]);
+        let Some(dynamics) = self.dynamics else {
+            return [left, right];
+        };
+        // The detector is the band's own output, so what drives the band is what is
+        // in its region and not the level of the whole mix.
+        let peak = left.abs().max(right.abs());
+        let attack = coefficient(dynamics.attack_ms);
+        let release = coefficient(dynamics.release_ms);
+        let follow = if peak > self.level { attack } else { release };
+        self.level += (peak - self.level) * follow;
+        let level_db = if self.level <= 1e-9 {
+            -120.0
+        } else {
+            20.0 * self.level.log10()
+        };
+        let target = dynamic_share(level_db, &dynamics);
+        let step = MAX_GAIN_STEP_DB / 6.0;
+        self.share += (target - self.share).clamp(-step, step);
+        // At a share of 1 the band is its static self; at 0 it is a straight wire.
+        [
+            frame[0] + (left - frame[0]) * self.share,
+            frame[1] + (right - frame[1]) * self.share,
+        ]
+    }
 }
 
 /// One frozen band set, kept alive for the length of a crossfade.
@@ -265,11 +394,7 @@ impl Bank {
             .filters
             .iter()
             .filter(|filter| filter.enabled)
-            .map(|filter| Stage {
-                biquad: Biquad::new(filter.kind, filter.frequency, filter.gain_db, filter.q),
-                left: Channel::default(),
-                right: Channel::default(),
-            })
+            .map(Stage::new)
             .collect();
         Self {
             config: config.clone(),
@@ -288,13 +413,11 @@ impl Bank {
     }
 
     fn process(&mut self, frame: [f32; 2]) -> [f32; 2] {
-        let mut left = frame[0] * self.gain;
-        let mut right = frame[1] * self.gain;
+        let mut signal = [frame[0] * self.gain, frame[1] * self.gain];
         for stage in &mut self.stages {
-            left = stage.left.step(&stage.biquad, left);
-            right = stage.right.step(&stage.biquad, right);
+            signal = stage.process(signal);
         }
-        [left, right]
+        signal
     }
 }
 
@@ -410,6 +533,7 @@ mod tests {
             gain_db,
             q,
             enabled: true,
+            dynamics: None,
         }
     }
 
@@ -441,6 +565,61 @@ mod tests {
 
     fn db(value: f32) -> f32 {
         20.0 * value.max(1e-12).log10()
+    }
+
+    fn render_at(
+        config: &EqConfig,
+        frames: usize,
+        frequency: f32,
+        amplitude: f32,
+    ) -> Vec<[f32; 2]> {
+        let mut eq = Eq::new(config);
+        (0..frames)
+            .map(|index| eq.process(tone(index, frequency, amplitude), config))
+            .collect()
+    }
+
+    #[test]
+    fn a_dynamic_band_gives_way_when_its_own_region_is_loud() {
+        let dynamic = |gain_db: f32, dynamics: Option<Dynamics>| EqFilter {
+            kind: EqKind::Peaking,
+            frequency: 1_000.0,
+            gain_db,
+            q: 1.4,
+            enabled: true,
+            dynamics,
+        };
+        // A quiet tone sits under the threshold, so the band is its static self.
+        let quiet = render_at(
+            &config(vec![dynamic(12.0, Some(Dynamics::default()))]),
+            48_000,
+            1_000.0,
+            0.01,
+        );
+        let quiet_boost = db(amplitude(&quiet, 4_800)) - db(0.01);
+        assert!(
+            (quiet_boost - 12.0).abs() < 1.0,
+            "a quiet band measured {quiet_boost:.1} dB"
+        );
+        // The same band on a loud tone pulls itself back towards a straight wire.
+        let loud = render_at(
+            &config(vec![dynamic(12.0, Some(Dynamics::default()))]),
+            48_000,
+            1_000.0,
+            0.5,
+        );
+        let loud_boost = db(amplitude(&loud, 4_800)) - db(0.5);
+        assert!(
+            loud_boost < 4.0,
+            "a loud band kept {loud_boost:.1} dB of its 12"
+        );
+        // Without dynamics the same band is the same at either level.
+        let static_loud = render_at(&config(vec![peak_filter(1_000.0, 12.0, 1.4)]), 48_000, 1_000.0, 0.5);
+        let static_boost = db(amplitude(&static_loud, 4_800)) - db(0.5);
+        assert!(
+            (static_boost - 12.0).abs() < 1.0,
+            "a static band measured {static_boost:.1} dB"
+        );
     }
 
     #[test]
@@ -617,8 +796,8 @@ mod tests {
         let config = config(vec![
             peak_filter(20.0, 24.0, 18.0),
             peak_filter(19_000.0, 24.0, 0.1),
-            EqFilter { kind: EqKind::Highpass, frequency: 20.0, gain_db: 0.0, q: 0.1, enabled: true },
-            EqFilter { kind: EqKind::Notch, frequency: 1_000.0, gain_db: 0.0, q: 18.0, enabled: true },
+            EqFilter { kind: EqKind::Highpass, frequency: 20.0, gain_db: 0.0, q: 0.1, enabled: true, dynamics: None },
+            EqFilter { kind: EqKind::Notch, frequency: 1_000.0, gain_db: 0.0, q: 18.0, enabled: true, dynamics: None },
         ]);
         let out = render(&config, 9_600, 440.0);
         assert!(out

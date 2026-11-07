@@ -179,6 +179,7 @@ mod tests {
                         gain_db: 4.0,
                         q: 0.7,
                         enabled: true,
+                        dynamics: None,
                     }],
                 },
                 ..ChainConfig::default()

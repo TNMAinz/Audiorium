@@ -280,6 +280,7 @@ fn parse_filter(line: &str, at_line: usize) -> Result<EqFilter, String> {
         gain_db,
         q,
         enabled,
+        dynamics: None,
     })
 }
 

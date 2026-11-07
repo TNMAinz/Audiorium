@@ -76,6 +76,7 @@ fn band(kind: EqKind, frequency: f32, gain_db: f32, q: f32) -> EqFilter {
         gain_db,
         q,
         enabled: true,
+        dynamics: None,
     }
 }
 

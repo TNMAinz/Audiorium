@@ -10,7 +10,7 @@ type Chain = ComponentProps<typeof ProcessorRack>['chain'];
 const chain: Chain = {
   native: true, chain: defaultChain, meters: idleMeters, eqCurve: idleEqResponse, error: '',
   presets: emptyPresets, patchError: '',
-  setPanner: () => {}, setReverb: () => {}, setLimiter: () => {}, randomizeReverb: () => {},
+  setPanner: () => {}, setReverb: () => {}, setLimiter: () => {}, setCompressor: () => {}, setSaturator: () => {}, setOrder: () => {}, setStereoMode: () => {}, randomizeReverb: () => {},
   setEq: () => {}, updateFilter: () => {}, addFilter: () => {}, removeFilter: () => {},
   resetEq: () => {}, matchHeadroom: () => {},
   applyPreset: () => {}, renamePreset: async () => true, deletePreset: () => {},
@@ -18,6 +18,22 @@ const chain: Chain = {
 const render = (settings: Chain) => renderToStaticMarkup(<ProcessorsPage chain={settings} onOpenEq={() => {}} />);
 
 describe('processor rack', () => {
+  it('switches the rack between left/right and mid/side', () => {
+    const markup = render(chain);
+    expect(markup).toContain('aria-label="Channels"');
+    expect(markup).toContain('>L / R<');
+    expect(markup).toContain('>M / S<');
+    expect(markup).toContain('Rack runs on left and right');
+
+    // The mode is the engine's, so the checked switch is the one the chain reports.
+    const midSide = render({
+      ...chain,
+      chain: { ...defaultChain, stereoMode: 'ms' },
+    });
+    expect(midSide).toContain('Rack runs on mid and side');
+    expect(midSide).not.toContain('Rack runs on left and right');
+  });
+
   it('is built from instruments, not a form of sliders', () => {
     const markup = render(chain);
     expect(markup).not.toContain('type="range"');
@@ -132,14 +148,53 @@ describe('processor rack', () => {
     expect(markup).toContain('>03<');
   });
 
+  it('moves a stage through the path instead of only drawing it', () => {
+    const markup = render(chain);
+    // Every stage can be moved, and the two ends say where the path stops.
+    expect(markup).toContain('aria-label="Move Reverb earlier"');
+    expect(markup).toContain('aria-label="Move Limiter later"');
+    expect(markup).toContain('aria-label="Move Binaural panner earlier" title="Earlier in the signal path" disabled');
+    expect(markup).toContain('aria-label="Move Limiter later" title="Later in the signal path" disabled');
+  });
+
+  it('carries the compressor and the saturator as processors of their own', () => {
+    const markup = render(chain);
+    expect(markup).toContain('>Compressor<');
+    expect(markup).toContain('>Saturator<');
+    expect(markup).toContain('aria-label="Ratio"');
+    expect(markup).toContain('aria-label="Knee"');
+    expect(markup).toContain('aria-label="Make-up"');
+    expect(markup).toContain('aria-label="Drive"');
+    expect(markup).toContain('aria-label="Tone"');
+    // The oversampling is a figure on the plate, not a word in the stage's model line.
+    expect(markup).toContain('>Oversampling<');
+    expect(markup).toContain('>4×<');
+  });
+
+  it('draws the rack in the order the engine was given', () => {
+    const reordered: Chain = {
+      ...chain,
+      chain: { ...defaultChain, order: ['limiter', 'compressor', 'saturator', 'eq', 'reverb', 'panner'] },
+    };
+    const markup = render(reordered);
+    const limiter = markup.indexOf('>Limiter<');
+    const compressor = markup.indexOf('>Compressor<');
+    const panner = markup.indexOf('>Binaural panner<');
+    expect(limiter).toBeGreaterThan(-1);
+    expect(compressor).toBeGreaterThan(limiter);
+    expect(panner).toBeGreaterThan(compressor);
+    // The numbers follow the order, they are not the default sequence's numbers.
+    expect(markup.indexOf('>01<')).toBeLessThan(limiter);
+  });
+
   it('states how many stages are in the path, and which are not', () => {
-    expect(render(chain)).toContain('All three bypassed · bit-exact pass-through');
+    expect(render(chain)).toContain('All 6 bypassed · bit-exact pass-through');
     const roomOnly: Chain = {
       ...chain,
       chain: { ...defaultChain, reverb: { ...defaultChain.reverb, enabled: true } },
       meters: { ...idleMeters, reverbEnabled: true, wetMix: 0.42 },
     };
-    expect(render(roomOnly)).toContain('1 of 3 in path · Reverb · Binaural panner and Limiter bypassed');
+    expect(render(roomOnly)).toContain('1 of 6 engaged · Reverb · Binaural panner, Equaliser, Compressor, Saturator and Limiter bypassed');
   });
 
   it('reports the output level it is holding, not a constant', () => {

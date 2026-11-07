@@ -13,9 +13,14 @@ audio path.
 | `symphonia` | 0.5.4 | MPL-2.0 | Decoding, with the `mp3`, `flac`, `wav`, `pcm`, `ogg`, `vorbis`, `isomp4`, `aac`, `alac` features |
 | `wasapi` | 0.26.0 (Windows only) | MIT | WASAPI render client and device enumeration |
 | `windows` | 0.62 (Windows only) | MIT OR Apache-2.0 | `ISpatialAudioClient`, static spatial objects and the `PROPVARIANT` activation blob for the Atmos output |
+| `flacenc` | 0.5.1 | Apache-2.0 | The FLAC encoder behind a lossless master: frame coding, `STREAMINFO` and metadata blocks. Used unmodified as a linked library |
+| `md-5` | 0.11.0 | MIT OR Apache-2.0 | The sample digest a FLAC `STREAMINFO` carries, so a master states its own MD5 |
+| `image` | 0.25 | MIT OR Apache-2.0 | Decoding a cover to a thumbnail, and reading a picture's dimensions for a FLAC `PICTURE` block |
 
-`serde`, `symphonia`, `wasapi` and `windows` are the whole dependency set: the DSP is
-written in this repository and uses no external filter, FFT or metering crate. The
+Those crates plus `serde`, `symphonia`, `wasapi` and `windows` are the whole dependency
+set: the DSP is written in this repository and uses no external filter, FFT or metering
+crate. `flacenc` is an encoder only; nothing decodes through it (Symphonia does that),
+and no external process is spawned for a render. The
 Atmos path uses Microsoft's platform renderer through `windows`; it does not bundle
 Dolby code or decode an Atmos bitstream.
 

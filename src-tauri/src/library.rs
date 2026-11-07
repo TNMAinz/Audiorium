@@ -1,9 +1,10 @@
 //! Local library browsing.
 //!
 //! There is no playback engine yet, so this module only walks a folder and reads
-//! what a file already says about itself. Tags come from ID3v2/ID3v1 (MP3) and
-//! Vorbis comments (FLAC); every other container falls back to the file name.
-//! Nothing is copied, uploaded or played.
+//! what a file already says about itself. Tags come from ID3v2/ID3v1 (MP3), Vorbis
+//! comments (FLAC), and a RIFF `LIST`/`INFO` chunk or an embedded ID3v2 tag (WAV);
+//! every other container falls back to the file name. Nothing is copied, uploaded or
+//! played.
 
 use serde::Serialize;
 use std::fs;
@@ -13,6 +14,8 @@ use std::time::UNIX_EPOCH;
 const AUDIO_EXTENSIONS: [&str; 9] = ["mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "aiff", "aif"];
 const MAX_TRACKS: usize = 5000;
 const MAX_DEPTH: usize = 12;
+/// The folder the master writer puts prints in; the scan leaves it alone.
+const MASTERED_FOLDER: &str = crate::render::MASTERED_FOLDER;
 /// Leading metadata is always at the start of the file, so only the head is read.
 const HEAD_BYTES: u64 = 262_144;
 
@@ -92,10 +95,10 @@ fn syncsafe(value: &[u8]) -> usize {
         | (value[3] as usize & 0x7F)
 }
 
-struct Tags {
-    title: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
+pub(crate) struct Tags {
+    pub(crate) title: Option<String>,
+    pub(crate) artist: Option<String>,
+    pub(crate) album: Option<String>,
 }
 
 fn id3v2(bytes: &[u8]) -> Option<Tags> {
@@ -230,6 +233,184 @@ fn flac(bytes: &[u8]) -> Option<Tags> {
     Some(tags)
 }
 
+/// One RIFF chunk body at a time: name, length, and where the next one starts.
+/// Chunks are word aligned, so an odd body is followed by one pad byte.
+fn riff_chunks(bytes: &[u8]) -> Vec<(&[u8], &[u8])> {
+    let mut chunks = Vec::new();
+    let mut offset = 12;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
+        let start = offset + 8;
+        let stop = start.saturating_add(size).min(bytes.len());
+        chunks.push((id, &bytes[start..stop]));
+        if id == b"data" {
+            break;
+        }
+        offset = stop + (size & 1);
+    }
+    chunks
+}
+
+fn is_riff(bytes: &[u8]) -> bool {
+    bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE"
+}
+
+/// RIFF `LIST`/`INFO` fields: the names Windows shows for a WAV, plus the two
+/// spellings other writers use for the same things.
+fn riff_info(body: &[u8]) -> Option<Tags> {
+    if body.len() < 4 || &body[0..4] != b"INFO" {
+        return None;
+    }
+    let mut tags = Tags { title: None, artist: None, album: None };
+    let mut offset = 4;
+    while offset + 8 <= body.len() {
+        let id = &body[offset..offset + 4];
+        let size = u32::from_le_bytes([
+            body[offset + 4],
+            body[offset + 5],
+            body[offset + 6],
+            body[offset + 7],
+        ]) as usize;
+        let start = offset + 8;
+        let stop = start.saturating_add(size).min(body.len());
+        if stop > start {
+            let text = info_text(&body[start..stop]);
+            let slot = match id {
+                b"INAM" | b"TITL" => Some(&mut tags.title),
+                b"IART" | b"ARTIST" => Some(&mut tags.artist),
+                b"IPRD" | b"IALB" => Some(&mut tags.album),
+                _ => None,
+            };
+            if let (Some(slot), Some(value)) = (slot, text) {
+                if slot.is_none() {
+                    *slot = Some(value);
+                }
+            }
+        }
+        offset = stop + (size & 1);
+    }
+    (tags.title.is_some() || tags.artist.is_some() || tags.album.is_some()).then_some(tags)
+}
+
+/// An INFO value: NUL terminated, written as UTF-8 here and as Latin-1 by older tools.
+fn info_text(bytes: &[u8]) -> Option<String> {
+    let trimmed = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+    let value = match std::str::from_utf8(trimmed) {
+        Ok(text) => text.to_string(),
+        Err(_) => latin1(trimmed),
+    };
+    let value = value.trim_end_matches('\0').trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+/// A WAV's own tags: `LIST`/`INFO` first, then an embedded ID3v2 tag, which is where
+/// a cover lives because RIFF has no chunk for one.
+fn riff_tags(bytes: &[u8]) -> Option<Tags> {
+    if !is_riff(bytes) {
+        return None;
+    }
+    let mut info = None;
+    let mut id3 = None;
+    for (id, body) in riff_chunks(bytes) {
+        match id {
+            b"LIST" => info = info.or_else(|| riff_info(body)),
+            b"id3 " | b"ID3 " => id3 = id3.or_else(|| id3v2(body)),
+            _ => {}
+        }
+    }
+    match (info, id3) {
+        (Some(mut info), Some(id3)) => {
+            info.title = info.title.or(id3.title);
+            info.artist = info.artist.or(id3.artist);
+            info.album = info.album.or(id3.album);
+            Some(info)
+        }
+        (Some(info), None) => Some(info),
+        (None, Some(id3)) => Some(id3),
+        (None, None) => None,
+    }
+}
+
+/// The embedded ID3v2 tag of a RIFF file, for the cover reader.
+pub(crate) fn riff_id3(bytes: &[u8]) -> Option<&[u8]> {
+    if !is_riff(bytes) {
+        return None;
+    }
+    riff_chunks(bytes)
+        .into_iter()
+        .find(|(id, body)| (*id == b"id3 " || *id == b"ID3 ") && !body.is_empty())
+        .map(|(_, body)| body)
+}
+
+/// The first front-cover picture in an ID3v2 tag, as the bytes the tag carries.
+pub(crate) fn id3v2_picture(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() < 10 || &bytes[0..3] != b"ID3" {
+        return None;
+    }
+    let major = bytes[3];
+    if !(3..=4).contains(&major) {
+        return None;
+    }
+    let tag_size = syncsafe(&bytes[6..10]);
+    let end = (10 + tag_size).min(bytes.len());
+    let mut offset = 10;
+    while offset + 10 <= end {
+        let header = &bytes[offset..offset + 10];
+        if header[0] == 0 {
+            break;
+        }
+        let id = &header[0..4];
+        let size = if major == 4 {
+            syncsafe(&header[4..8])
+        } else {
+            u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize
+        };
+        let start = offset + 10;
+        let stop = start.saturating_add(size).min(end);
+        if size == 0 || start >= stop {
+            break;
+        }
+        if id == b"APIC" {
+            if let Some(picture) = apic_picture(&bytes[start..stop]) {
+                return Some(picture);
+            }
+        }
+        offset = stop;
+    }
+    None
+}
+
+/// `APIC`: encoding, MIME (Latin-1, NUL terminated), picture type, description in that
+/// encoding, then the image itself.
+fn apic_picture(body: &[u8]) -> Option<Vec<u8>> {
+    let (encoding, rest) = body.split_first()?;
+    let mime_end = rest.iter().position(|byte| *byte == 0)?;
+    let after_mime = rest.get(mime_end + 1..)?;
+    let (_, after_type) = after_mime.split_first()?;
+    let description_end = match encoding {
+        // UTF-16 descriptions end on an even pair of NULs.
+        1 | 2 => {
+            let mut at = 0;
+            while at + 1 < after_type.len() {
+                if after_type[at] == 0 && after_type[at + 1] == 0 {
+                    break;
+                }
+                at += 2;
+            }
+            at + 2
+        }
+        _ => after_type.iter().position(|byte| *byte == 0)? + 1,
+    };
+    let data = after_type.get(description_end..)?;
+    (!data.is_empty()).then(|| data.to_vec())
+}
+
 fn read_tags(path: &Path) -> Option<Tags> {
     let bytes = read_head(path)?;
     match extension_of(path).as_str() {
@@ -238,8 +419,14 @@ fn read_tags(path: &Path) -> Option<Tags> {
             id3v1(&tail)
         }),
         "flac" => flac(&bytes),
+        "wav" => riff_tags(&bytes),
         _ => None,
     }
+}
+
+/// What a file says about itself, for a module that needs the tags without the scan.
+pub(crate) fn tags_of(path: &Path) -> Option<Tags> {
+    read_tags(path)
 }
 
 fn read_head(path: &Path) -> Option<Vec<u8>> {
@@ -305,6 +492,12 @@ pub fn scan(root: &str) -> Result<LibraryScan, String> {
             }
             let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
             if is_dir {
+                // A master has a folder of its own. Scanning it would put prints back in
+                // the library and let one be mastered again, which is not what the
+                // library is: it is the music that came into the app.
+                if name.eq_ignore_ascii_case(MASTERED_FOLDER) {
+                    continue;
+                }
                 if depth < MAX_DEPTH {
                     queue.push((path, depth + 1));
                 }
@@ -500,6 +693,104 @@ mod tests {
         path
     }
 
+    /// A RIFF file with the chunks a master is written with, and nothing else in them.
+    fn wav_with(chunks: &[(&[u8], Vec<u8>)]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (id, bytes) in chunks {
+            body.extend_from_slice(id);
+            body.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            body.extend_from_slice(bytes);
+            if bytes.len() % 2 == 1 {
+                body.push(0);
+            }
+        }
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&((4 + body.len()) as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&[0u8; 16]);
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn a_wav_master_is_read_back_from_its_own_chunks() {
+        let directory = scratch("wav-tags");
+        let mut info = b"INFO".to_vec();
+        for (id, value) in [(b"INAM", "First Light"), (b"IART", "Nova"), (b"IPRD", "Night")] {
+            let mut text = value.as_bytes().to_vec();
+            text.push(0);
+            info.extend_from_slice(id);
+            info.extend_from_slice(&(text.len() as u32).to_le_bytes());
+            info.extend_from_slice(&text);
+            if text.len() % 2 == 1 {
+                info.push(0);
+            }
+        }
+        let tagged = wav_with(&[(b"LIST", info), (b"data", vec![0; 8])]);
+        let path = write_file(&directory, "tagged.wav", &tagged);
+        let tags = read_tags(&path).expect("the INFO chunk");
+        assert_eq!(tags.title.as_deref(), Some("First Light"));
+        assert_eq!(tags.artist.as_deref(), Some("Nova"));
+        assert_eq!(tags.album.as_deref(), Some("Night"));
+
+        // An ID3v2 tag inside the RIFF is read as well, which is where the cover lives.
+        let id3 = id3v2_bytes("Ada", "Grace", "Notes");
+        let nested = wav_with(&[(b"id3 ", id3.clone()), (b"data", vec![0; 8])]);
+        let path = write_file(&directory, "nested.wav", &nested);
+        let tags = read_tags(&path).expect("the embedded tag");
+        assert_eq!(tags.title.as_deref(), Some("Ada"));
+        assert_eq!(tags.album.as_deref(), Some("Notes"));
+        assert_eq!(riff_id3(&nested), Some(id3.as_slice()));
+
+        // A WAV with neither produces no tags, rather than an empty set of them.
+        let plain = wav_with(&[(b"data", vec![0; 8])]);
+        let path = write_file(&directory, "plain.wav", &plain);
+        assert!(read_tags(&path).is_none());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_picture_of_an_embedded_tag_is_extracted() {
+        // TIT2 then APIC: encoding, MIME, front cover, empty description, the image.
+        let mut frames = Vec::new();
+        for (id, body) in [
+            (&b"TIT2"[..], {
+                let mut body = vec![0u8];
+                body.extend_from_slice(b"A song");
+                body
+            }),
+            (&b"APIC"[..], {
+                let mut body = vec![0u8];
+                body.extend_from_slice(b"image/png\0");
+                body.push(3);
+                body.push(0);
+                body.extend_from_slice(&[0x89, b'P', b'N', b'G', 1, 2, 3]);
+                body
+            }),
+        ] {
+            frames.extend_from_slice(id);
+            frames.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            frames.extend_from_slice(&[0, 0]);
+            frames.extend_from_slice(&body);
+        }
+        let size = frames.len() as u32;
+        let mut tag = b"ID3\x03\x00\x00".to_vec();
+        tag.extend_from_slice(&[
+            ((size >> 21) & 0x7F) as u8,
+            ((size >> 14) & 0x7F) as u8,
+            ((size >> 7) & 0x7F) as u8,
+            (size & 0x7F) as u8,
+        ]);
+        tag.extend_from_slice(&frames);
+        assert_eq!(
+            id3v2_picture(&tag).as_deref(),
+            Some(&[0x89, b'P', b'N', b'G', 1, 2, 3][..])
+        );
+        assert!(id3v2_picture(b"not a tag").is_none());
+    }
+
     #[test]
     fn id3v2_tags_are_read_from_an_mp3() {
         let directory = scratch("id3v2");
@@ -574,6 +865,19 @@ mod tests {
         let untagged = result.tracks.iter().find(|track| track.file_name == "three.wav").unwrap();
         assert_eq!(untagged.title, "three");
         assert!(!result.truncated);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_mastered_folder_is_not_part_of_the_library() {
+        let directory = scratch("mastered-skip");
+        write_file(&directory, "one.mp3", &id3v2_bytes("One", "Artist A", "Album"));
+        write_file(&directory, "Mastered/one (mastered).mp3", &id3v2_bytes("One", "Artist A", "Album"));
+        // The name is the folder's, not a case it has to match exactly.
+        write_file(&directory, "Elsewhere/MASTERED/two (mastered).mp3", &id3v2_bytes("Two", "Artist B", "Album"));
+        let result = scan(directory.to_str().unwrap()).unwrap();
+        let names: Vec<&str> = result.tracks.iter().map(|track| track.file_name.as_str()).collect();
+        assert_eq!(names, vec!["one.mp3"], "{names:?}");
         let _ = fs::remove_dir_all(&directory);
     }
 

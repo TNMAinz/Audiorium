@@ -4,14 +4,16 @@ import { SpatialFieldPage } from './SpatialFieldPage';
 import { AnalysisPage } from './AnalysisPage';
 import { SignalChainPage } from './SignalChainPage';
 import { ProcessorsPage } from './ProcessorsPage';
+import { MasterPage } from './MasterPage';
 import { EqualiserPage } from './EqualiserPage';
 import { DevicesPage } from './DevicesPage';
 import { LibraryPage } from './LibraryPage';
-import { defaultChain, defaultSpatial, emptyPresets, idleEqResponse, idleMeters } from '../model';
+import { defaultChain, defaultSpatial, emptyPresets, idleEqResponse, idleLoudness, idleMeters, idleRender, idleScan, type MasterFormat } from '../model';
 import { ANALYSIS_POLL_MS, normalizeCapture, type useAnalysis } from '../useAnalysis';
 import type { useLibrary } from '../hooks';
 import type { useChain } from '../useChain';
 import type { usePlayer } from '../usePlayer';
+import type { useRender } from '../useRender';
 
 type Audio = ReturnType<typeof useAnalysis>;
 type Library = ReturnType<typeof useLibrary>;
@@ -48,7 +50,7 @@ const player: Player = {
 const chain: ReturnType<typeof useChain> = {
   native: true, chain: defaultChain, meters: idleMeters, eqCurve: idleEqResponse, error: '',
   presets: emptyPresets, patchError: '',
-  setPanner: () => {}, setReverb: () => {}, setLimiter: () => {}, randomizeReverb: () => {},
+  setPanner: () => {}, setReverb: () => {}, setLimiter: () => {}, setCompressor: () => {}, setSaturator: () => {}, setOrder: () => {}, setStereoMode: () => {}, randomizeReverb: () => {},
   setEq: () => {}, updateFilter: () => {}, addFilter: () => {}, removeFilter: () => {},
   resetEq: () => {}, matchHeadroom: () => {},
   applyPreset: () => {}, renamePreset: async () => true, deletePreset: () => {},
@@ -256,15 +258,15 @@ describe('signal chain workspace', () => {
 });
 
 describe('processors workspace', () => {
-  it('is a page of the path, with the three stages and the meter bridge on it', () => {
+  it('is a page of the path, with all six stages and the meter bridge on it', () => {
     const markup = renderToStaticMarkup(<ProcessorsPage chain={chain} onOpenEq={() => {}} />);
     expect(markup).toContain('aria-labelledby="workspace-title"');
     expect(markup).toContain('>Processors<');
-    expect(markup).toContain('All three bypassed · bit-exact pass-through');
+    expect(markup).toContain('All 6 bypassed · bit-exact pass-through');
     expect(markup).toContain('48 kHz · stereo');
-    expect(markup).toContain('>01<');
-    expect(markup).toContain('>02<');
-    expect(markup).toContain('>03<');
+    for (const index of ['01', '02', '03', '04', '05', '06']) expect(markup).toContain(`>${index}<`);
+    expect(markup).toContain('Compressor');
+    expect(markup).toContain('Saturator');
     expect(markup).toContain('Meter bridge');
   });
   it('is a workspace, not a dialog, and hands the equaliser to its own page', () => {
@@ -506,5 +508,170 @@ describe('library workspace', () => {
     const markup = renderToStaticMarkup(<LibraryPage library={{ ...library, path: 'Z:/gone', error: 'That folder cannot be read' }} player={player} />);
     expect(markup).toContain('aria-label="Clear library"');
     expect(renderToStaticMarkup(<LibraryPage library={library} player={player} />)).not.toContain('aria-label="Clear library"');
+  });
+});
+
+describe('master workspace', () => {
+  const renderStub = (status = idleRender, format: MasterFormat = 'wav'): ReturnType<typeof useRender> => ({
+    native: true, status, error: '', source: '', format, setFormat: () => {}, rate: '48',
+    setRate: () => {}, destination: '', chooseSource: () => {}, start: async () => {},
+    startAlbum: async () => {}, cancel: async () => {},
+    scan: idleScan, scanError: '', scanFile: async () => {},
+    nullReport: null, nullError: '', nullTest: async () => {}, measureReference: async () => null,
+  });
+  const track = {
+    path: '/music/Track.flac', fileName: 'Track.flac', title: 'Track', artist: 'Artist',
+    album: 'Album', format: 'FLAC', bytes: 1_000_000, modified: 0,
+  };
+  const libraryStub = {
+    ...({} as ReturnType<typeof useLibrary>),
+    result: { root: '/music', tracks: [track], skipped: 0, truncated: false },
+  };
+  const playerStub = { ...({} as ReturnType<typeof usePlayer>), play: async () => {} };
+  const renderPage = (status = idleRender, library = libraryStub, format: MasterFormat = 'wav') => renderToStaticMarkup(
+    <MasterPage library={library} player={playerStub} chain={chain} render={renderStub(status, format)} />,
+  );
+
+  it('is a page with a source, an export and the before/after pair on it', () => {
+    const markup = renderPage();
+    expect(markup).toContain('>Master<');
+    expect(markup).toContain('48 kHz · stereo');
+    expect(markup).toContain('>Source<');
+    expect(markup).toContain('>Export<');
+    expect(markup).toContain('>Before / after<');
+    // The card that exports also says where the file will go, and the list of
+    // tracks it can come from is on the page.
+    expect(markup).toContain('Choose a track to see where its master goes.');
+    expect(markup).toContain('aria-label="Tracks to master"');
+    // Nothing has been measured, so every figure is a dash rather than a zero.
+    expect(markup).toContain('—');
+    expect(markup).not.toContain('0.0 LUFS');
+  });
+
+  it('offers the depth switch and refuses an export with no source', () => {
+    const markup = renderPage();
+    expect(markup).toContain('aria-label="Bit depth"');
+    expect(markup).toContain('>16-bit PCM<');
+    expect(markup).toContain('>32-bit float<');
+    expect(markup).toContain('title="Choose a track first"');
+  });
+
+  it('reports the pair the engine measured and lets the master be heard', () => {
+    const measured = {
+      ...idleLoudness,
+      integratedLufs: -14.2, loudnessRange: 6.1, truePeakDb: -1.0, samplePeakDb: -1.2,
+      dcOffsetDb: -60, correlation: 0.42, blocks: 40,
+    };
+    const done = {
+      ...idleRender, running: false, phase: 'done', progress: 1, frames: 2_400_000,
+      seconds: 50, bytes: 9_600_044, destination: '/music/Track (mastered).wav',
+      depth: '24-bit PCM', source: { ...measured, integratedLufs: -18.6 }, output: measured,
+    };
+    const markup = renderPage(done);
+    expect(markup).toContain('−18.6 LUFS');
+    expect(markup).toContain('−14.2 LUFS');
+    expect(markup).toContain('−1.0 dBTP');
+    expect(markup).toContain('aria-label="Compare"');
+    expect(markup).toContain('>Source<');
+    expect(markup).toContain('>Master<');
+    expect(markup).toContain('24-bit PCM');
+  });
+
+  it('offers WAV and FLAC, and drops the float depth a FLAC cannot carry', () => {
+    const wav = renderPage();
+    expect(wav).toContain('aria-label="Container"');
+    expect(wav).toContain('>WAV<');
+    expect(wav).toContain('>FLAC<');
+    expect(wav).toContain('>32-bit float<');
+    const flac = renderPage(idleRender, libraryStub, 'flac');
+    expect(flac).toContain('24-bit PCM FLAC');
+    expect(flac).toContain('aria-label="Bit depth"');
+    expect(flac).not.toContain('>32-bit float<');
+  });
+
+  it('judges the master against the delivery target it is aimed at', () => {
+    const measured = {
+      ...idleLoudness,
+      integratedLufs: -11.7, loudnessRange: 6.1, truePeakDb: -2.0, samplePeakDb: -2.2,
+      dcOffsetDb: -62, correlation: 0.31, blocks: 40,
+    };
+    const done = {
+      ...idleRender, running: false, phase: 'done', progress: 1, frames: 2_400_000,
+      seconds: 50, bytes: 9_600_044, destination: '/music/Track (mastered).wav',
+      depth: '24-bit PCM', source: { ...measured, integratedLufs: -18.6 }, output: measured,
+    };
+    const loud = renderPage(done);
+    // Streaming is the default target: -14 LUFS and a -1 dBTP ceiling.
+    expect(loud).toContain('aria-label="Delivery target"');
+    expect(loud).toContain('>Streaming<');
+    expect(loud).toContain('2.3 LU loud');
+    expect(loud).toContain('→ −2.3 dB');
+    expect(loud).toContain('lands on −14.0 LUFS');
+
+    const onTarget = renderPage({ ...done, output: { ...measured, integratedLufs: -14.1, truePeakDb: -1.4 } });
+    expect(onTarget).toContain('Meets −14.0 LUFS, −1.0 dBTP');
+    expect(onTarget).not.toContain('LU loud');
+
+    // Before a render there is nothing to pass, and the page says so rather than
+    // showing a green tick over a dash.
+    expect(renderPage()).toContain('Render to check a target');
+  });
+
+  it('says where to start when nothing has been scanned', () => {
+    const empty = { ...libraryStub, result: { root: '', tracks: [], skipped: 0, truncated: false } };
+    const markup = renderPage(idleRender, empty);
+    expect(markup).toContain('No tracks yet');
+    expect(markup).toContain('Scan a folder on the Library page first');
+  });
+
+  it('writes at the rate the page chooses, not only at 48 kHz', () => {
+    const markup = renderPage();
+    expect(markup).toContain('aria-label="Sample rate"');
+    expect(markup).toContain('>44.1 kHz<');
+    expect(markup).toContain('>48 kHz<');
+    expect(markup).toContain('>96 kHz<');
+    // The header names the rate the master will carry, so it is never a surprise.
+    expect(markup).toContain('24-bit PCM WAV · 48 kHz');
+  });
+
+  it('offers an album when two tracks belong to one', () => {
+    const second = { ...track, path: '/music/Second.flac', fileName: 'Second.flac', title: 'Second' };
+    const two = { ...libraryStub, result: { root: '/music', tracks: [track, second], skipped: 0, truncated: false } };
+    const markup = renderPage(idleRender, two);
+    expect(markup).toContain('Artist · Album');
+    expect(markup).toContain('2 tracks');
+    expect(markup).toContain('Master album');
+    // The album is a sequence written by the rack as it stands, and its button says so.
+    expect(markup).toContain('in order, as one programme');
+
+    // One track is not an album, so the card stays away rather than offering a queue of one.
+    expect(renderPage()).not.toContain('Master album');
+  });
+
+  it('measures a reference and draws the whole file', () => {
+    const markup = renderToStaticMarkup(<MasterPage
+      library={libraryStub}
+      player={playerStub}
+      chain={chain}
+      render={{
+        ...renderStub(),
+        scan: { ...idleScan, frames: 144_000, seconds: 3, envelope: [0.5, 0.4], loudness: [-9, -10], columns: 2, bands: 2, spectrum: [0.2, 0.5, 0.3, 0.6] },
+        nullReport: { frames: 144_000, differing: 0, maxDifferenceDb: -120 },
+      }}
+    />);
+    expect(markup).toContain('aria-label="Reference track"');
+    expect(markup).toContain('>Whole file<');
+    expect(markup).toContain('Read the file');
+    // A bypassed rack that changed nothing says so, and a difference would say which.
+    expect(markup).toContain('Bypass test');
+    expect(markup).toContain('Identical · 144,000 frames');
+    expect(markup).toContain('Peak envelope over 3.0 seconds');
+    expect(markup).toContain('Loudness over time, in LUFS');
+    expect(markup).toContain('Spectrogram, 2 columns of 2 bands');
+    // The timeline is drawn wider than the card and moved sideways: one column is
+    // four pixels, so two columns are an 8 px drawing the track can pan.
+    expect(markup).toContain('file-scan-track');
+    expect(markup).toContain('width:8px');
+    expect(markup).toContain('Whole file: peak envelope, loudness and spectrogram over 3.0 seconds');
   });
 });

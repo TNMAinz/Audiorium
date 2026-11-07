@@ -1,6 +1,6 @@
 [package]
 name = "audiorium"
-version = "1.2.2"
+version = "1.7.2"
 description = "A local-first audio observatory"
 authors = ["AUDIORIUM contributors"]
 edition = "2021"
@@ -9,7 +9,9 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+flacenc = "0.5.1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+md-5 = "0.11.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "flac", "wav", "pcm", "ogg", "vorbis", "isomp4", "aac", "alac"] }

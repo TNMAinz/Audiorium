@@ -1,6 +1,6 @@
 {
   "name": "audiorium",
-  "version": "1.2.2",
+  "version": "1.7.2",
   "private": true,
   "type": "module",
   "scripts": {

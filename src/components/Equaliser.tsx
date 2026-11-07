@@ -4,8 +4,8 @@ import { ScrollArea } from './instrument/ScrollArea';
 import { Segmented } from './instrument/Segmented';
 import { clamp } from './instrument/scales';
 import {
-  eqKinds, eqKindUsesGain, eqLimits, formatDb, formatHz, isCorrection, isFit, presetNameLimit,
-  type EqFilter, type EqKind, type EqPresetList, type EqResponse, type EqSettings,
+  defaultDynamics, eqKinds, eqKindUsesGain, eqLimits, formatDb, formatHz, isCorrection, isFit,
+  presetNameLimit, type EqFilter, type EqKind, type EqPresetList, type EqResponse, type EqSettings,
 } from '../model';
 
 // The plot is drawn in its own pixels, not in a viewBox that gets scaled: text
@@ -395,6 +395,7 @@ export function Equaliser({
               >
                 <span className="eq-row-index mono">{pad2(at + 1)}</span>
                 <span className="eq-row-kind" title={kindLabel}>{kindLabel}</span>
+                {filter.dynamics && <span className="eq-row-dyn mono" title="This band gives way when its own region is loud">DYN</span>}
                 <span className="eq-row-reading mono" title={reading}>{reading}</span>
               </button>
               <button
@@ -468,6 +469,62 @@ export function Equaliser({
               description="Width of the band: higher Q is narrower"
               announced={{ min: eqLimits.q.min, max: eqLimits.q.max, now: active.q }}
             />
+            <button
+              type="button"
+              className={`page-button ghost eq-dynamics-toggle ${active.dynamics ? 'on' : ''}`}
+              aria-pressed={!!active.dynamics}
+              disabled={!eqKindUsesGain(active.kind)}
+              title={active.dynamics
+                ? 'This band gives way when its own region is loud. Click to make it static again.'
+                : 'Let this band give way when its own region is loud: frequency-dependent compression, not a louder EQ'}
+              onClick={() => patch(index, { dynamics: active.dynamics ? null : { ...defaultDynamics } })}
+            >Dynamic</button>
+            {active.dynamics && <>
+              <Knob
+                label="Threshold"
+                value={active.dynamics.thresholdDb}
+                min={eqLimits.dynamics.threshold.min}
+                max={eqLimits.dynamics.threshold.max}
+                step={eqLimits.dynamics.threshold.step}
+                format={value => formatDb(value)}
+                onChange={value => patch(index, { dynamics: { ...active.dynamics!, thresholdDb: value } })}
+                reset={defaultDynamics.thresholdDb}
+                description="The band's own level where it starts to give way"
+              />
+              <Knob
+                label="Ratio"
+                value={active.dynamics.ratio}
+                min={eqLimits.dynamics.ratio.min}
+                max={eqLimits.dynamics.ratio.max}
+                step={eqLimits.dynamics.ratio.step}
+                format={value => `${value.toFixed(1)}:1`}
+                onChange={value => patch(index, { dynamics: { ...active.dynamics!, ratio: value } })}
+                reset={defaultDynamics.ratio}
+                description="How far past the threshold the band is pulled back towards a straight wire"
+              />
+              <Knob
+                label="Attack"
+                value={active.dynamics.attackMs}
+                min={eqLimits.dynamics.attack.min}
+                max={eqLimits.dynamics.attack.max}
+                step={eqLimits.dynamics.attack.step}
+                format={value => `${value < 10 ? value.toFixed(1) : Math.round(value)} ms`}
+                onChange={value => patch(index, { dynamics: { ...active.dynamics!, attackMs: value } })}
+                reset={defaultDynamics.attackMs}
+                description="How quickly the band gives way when its region gets loud"
+              />
+              <Knob
+                label="Release"
+                value={active.dynamics.releaseMs}
+                min={eqLimits.dynamics.release.min}
+                max={eqLimits.dynamics.release.max}
+                step={eqLimits.dynamics.release.step}
+                format={value => `${(value / 1000).toFixed(2)} s`}
+                onChange={value => patch(index, { dynamics: { ...active.dynamics!, releaseMs: value } })}
+                reset={defaultDynamics.releaseMs}
+                description="How quickly the band returns once its region falls quiet again"
+              />
+            </>}
           </div>
           : <p className="eq-empty">Select a band to edit it.</p>}
 

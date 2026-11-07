@@ -20,7 +20,7 @@ export function ProcessorsPage({ chain, onOpenEq }: Props) {
     </div>}
   >
     <div className="page-grid processors-grid">
-      <ProcessorRack chain={chain} />
+      <ProcessorRack chain={chain} onOpenEq={onOpenEq} />
     </div>
   </Page>;
 }

@@ -86,7 +86,19 @@ show what is actually live.
 `ChainState::effective()` returns an idle configuration when every stage is off,
 so a bypassed chain costs one branch per frame and is bit-exact.
 
-## 3. The processing chain, in order
+## 3. The processing chain
+
+Every frame meets the spatial renderer, then walks a rack of **six processors** in
+the order the configuration names: binaural panner, reverb, equaliser, compressor,
+saturator and limiter by default. The order is a list in `ChainConfig`, validated by
+`ChainConfig::validate` so every processor appears exactly once; a file written
+before the rack existed has no list and gets that default, which is the fixed
+sequence it used to run. The spatial renderer stays outside the rack because it is
+the layout, not a processor: the master page renders the rack alone, so a file is
+mastered by the processors and not by the mode the speakers happen to be in.
+
+The sections below describe the stages themselves; the default order is the one
+listed above.
 
 ### 3.1 Playback level
 
@@ -101,9 +113,8 @@ manual) from the stereo mix by matrix, then renders that layout to two channels
 using per-speaker level, interaural time delay and a head-shadow filter. Stereo
 mode is exactly transparent. Mode changes ramp instead of jumping.
 
-Atmos is the exception: the spatial stage is a pass-through, and after the panner,
-reverb, equaliser and limiter the render loop derives twelve mono feeds from the
-processed stereo frame (`Bed`) and writes them to a Windows Spatial Sound stream
+Atmos is the exception: the spatial stage is a pass-through, and after the rack has
+run the render loop derives twelve mono feeds from the processed stereo frame (`Bed`) and writes them to a Windows Spatial Sound stream
 (`spatial_out.rs`) as a 7.1.4 static bed. Windows renders that bed with the spatial
 format the user selected for the endpoint — Dolby Atmos for Headphones or Home
 Theater when that is the chosen format, Windows Sonic otherwise. The app ships no
@@ -193,7 +204,103 @@ low and the gain it asks for leaves the louder channel to be clipped flat at the
 ceiling, which is heard as grit. Sample peak only; nothing is oversampled, so
 inter-sample peaks are not measured and "true peak" is never claimed.
 
-### 3.7 What is stored (`store.rs`, `presets.rs`)
+### 3.7 Compressor (`compressor.rs`)
+
+A stereo-linked feed-forward compressor: the detector is the loudest channel, so a
+loud side ducks the whole image. The curve is an over-easy quadratic knee of
+`knee_db` around the threshold and `ratio` above it; attack and release are
+one-poles calibrated to reach 90 % of their target in the stated time, and the
+applied reduction is capped per sample so no setting can step the waveform. Make-up
+gain follows the reduction. Bypass is bit-exact and clears the detector, so
+switching it in cannot play a tail from before. Not a multiband compressor, and
+not a limiter: it does not hold a ceiling.
+
+### 3.8 Saturator (`saturator.rs`)
+
+`tanh(drive · x)` run at four times the sample rate — 48 taps per phase, a
+Blackman-windowed sinc at a 0.11 cycles/sample cutoff — then decimated by the
+matched filter, so the harmonics the curve adds stay below the band instead of
+folding back into it as aliasing. `tone` tilts the result (a one-pole blend toward
+2.5 kHz below half, a scaled first difference above it, untouched at exactly half),
+a 10 Hz DC blocker removes the offset even-order terms lift, and `mix` blends
+against the dry signal delayed by the oversampler's own latency so no comb appears.
+Bypass and `mix = 0` are both bit-exact.
+
+### 3.9 Rendering a file (`render.rs`)
+
+The master page exports a library file through the same `Chain` the engine runs (the
+interface says export, which is the word a mastering engineer uses; the module is the
+renderer):
+`player::decode` hands blocks from the same Symphonia decoder and resampler
+playback uses, every frame goes through `Chain::process_rack`, and `export.rs`
+writes a WAV — 48 kHz stereo, 16- or 24-bit PCM with TPDF dither of ±1 LSB, or
+32-bit float with none — or a lossless FLAC of the same samples, coding one
+4096-sample frame at a time so the file is never held in memory. At 16 bits the
+dither is noise-shaped: the quantiser's residual is subtracted from the next sample
+before rounding, so the noise the listener hears is the difference between two
+successive errors — a first-order high pass that tilts the floor out of the middle of
+the band at the cost of a little more of it at the top, where it is least audible.
+A 24-bit master stays flat-dithered; the shaping is state per channel and the seed
+is fixed, so two renders of one file are the same bytes. The render runs on its own thread with its own `Chain`, so
+playback keeps playing; progress and the outcome are published as one status the
+page reads, and a cancelled or failed render removes its partial file. Because the
+reverb and the delay lines still hold audio after the last decoded frame, the render
+runs past the end by the room's own decay plus the look-ahead, so a master never
+cuts its tail off. `mastered_path` puts the output in a `Mastered` folder at the
+library root — one place for every print, whatever album it came from — with
+`(mastered)` in the file name; the source is never overwritten. A file from outside
+the library is mastered into a `Mastered` folder beside itself instead, because
+writing into a library it was never scanned from would put a print somewhere the
+user did not point at. The folder is created on demand, and `library::scan` skips
+it by name, so a master cannot come back into the list and be mastered again.
+
+A master keeps the description of the file it came from, read from that file rather than
+from what the page displays: a `LIST`/`INFO` chunk carries title, artist, album and the
+writing application, and when the source had a cover an `id3 ` chunk carries it as a
+front-cover `APIC` frame — RIFF has no picture chunk, so an embedded ID3v2 tag is the only
+in-file convention for one. Both sit before `data`. `library.rs` reads the same chunks
+back, which is why a scanned master shows its title and artist instead of its file name.
+
+A FLAC master carries the same description as Vorbis comments (`TITLE`, `ARTIST`, `ALBUM`,
+`ENCODER`) and the cover as a front-cover `PICTURE` block, both as metadata blocks before
+the first frame; the image bytes are the source's own, and only the width and height the
+block states are read from them. The encoder is `flacenc`, driven the way its own
+streaming example drives it: `STREAMINFO` is written first with its totals blank and
+patched in place at the end with the frame count, the block and frame sizes and the MD5
+of the samples, which is what makes a FLAC master verifiable rather than merely readable.
+Both containers share one quantiser and one dither, so a WAV and a FLAC of the same render
+carry the same sample codes; FLAC has no float sample, so the depth switch offers 16 and 24
+bit when it is chosen. FLAC is lossless, not a smaller-sounding master: the only difference
+from the WAV is that the bytes are packed.
+
+A master is also checked against the delivery it is aimed at. The target names an
+integrated loudness and a true-peak ceiling — -14 LUFS and -1 dBTP for streaming, -16 for
+podcast, -23 for EBU R128 broadcast, or none at all — and the page reports the distance the
+measured master is from it rather than re-rendering to fit. A loudness within half a unit of
+the target holds; a true peak above the ceiling does not. The gain that would close the gap is
+stated and never applied: a target is a check, not a normaliser. With "None" chosen, nothing
+is judged, so a file cannot fail a spec it was not given.
+
+The comparison control plays the source and the master at one loudness, with the rack bypassed
+(`set_monitor_direct`). That bypass is the point: a master already contains the rack, so playing
+it through the rack again would judge a twice-processed file against a once-processed one. The
+engine carries a separate monitor gain beside the user's level (`set_monitor_trim`), attenuation
+only, and the page pulls the louder of the two files down by the difference the render measured.
+The fader is never moved, so the comparison cannot leave the user's level changed, and both the
+gain and the bypass are reset when the page is left or a new master is printed.
+
+### 3.10 Loudness and levels (`loudness.rs`)
+
+The master page's before/after table comes from two meters in the same render pass,
+one before the rack and one after it. The meter implements BS.1770-4: the two-stage
+K-weighting filter, 400 ms blocks at 75 % overlap with the −70 LUFS absolute gate
+and the −10 LU relative gate for integrated loudness, a 3 s short-term window whose
+gated 10th/95th percentiles give the loudness range, 4× oversampled true peak from a
+windowed-sinc interpolator, sample peak, DC offset and channel correlation. Every
+figure is floored (-70 LUFS, −120 dB for peaks) and finite; nothing is invented
+before enough audio has arrived, and the UI shows a dash rather than a zero.
+
+### 3.11 What is stored (`store.rs`, `presets.rs`)
 
 * The whole chain configuration and the saved patch library are one JSON document
   at `%APPDATA%\AUDIORIUM\state.json` (or `$AUDIORIUM_CONFIG_DIR/state.json`).

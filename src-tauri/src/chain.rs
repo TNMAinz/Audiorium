@@ -1,44 +1,150 @@
 //! The monitor and playback processing chain.
 //!
-//! Every frame that reaches a device passes through the same five stages in the
-//! same order: the spatial renderer, the binaural panner, the delay-network
-//! room, the parametric equaliser, then the look-ahead limiter. Capture
-//! monitoring and library playback build the same `Chain` from the same shared
-//! configuration, so what you hear on the monitor is the chain you see.
+//! Every frame that reaches a device first meets the spatial renderer, then
+//! walks the rack: six processors in the order the configuration names, so a
+//! user can put the equaliser before the room or the saturator after the
+//! compressor. Capture monitoring and library playback build the same `Chain`
+//! from the same shared configuration, so what you hear on the monitor is the
+//! chain you see.
 //!
-//! The equaliser sits next to the transducer, where a headphone correction
-//! belongs, and the limiter follows it to guard the headroom a boost takes.
-//! The chain does not add loudness metering or a compressor. Each stage can be
-//! switched off, and a stage that is off is bit-exact pass-through.
+//! The rack used to be a fixed sequence. It is an order list now because the
+//! master page renders the same processors offline and a fixed sequence would
+//! make the file differ from what the rack shows. Each stage can be switched
+//! off, and a stage that is off is bit-exact pass-through.
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+use crate::compressor::{self, Compressor, CompressorConfig};
 use crate::eq::{self, Eq, EqConfig, EqFilter, EqResponse};
 use crate::presets::{Library, PresetList};
+use crate::saturator::{self, Saturator, SaturatorConfig};
 use crate::store::{self, Store, Stored};
 use crate::limiter::{self, Limiter, LimiterConfig};
 use crate::panner::{self, Panner, PannerConfig};
 use crate::reverb::{self, Reverb, ReverbConfig};
 use crate::spatial::{SpatialConfig, SpatialRenderer};
 
-/// Everything the three processors need, in one value the interface can read and
+/// One processor in the rack. The order list names each of these exactly once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StageId {
+    Panner,
+    Reverb,
+    Eq,
+    Compressor,
+    Saturator,
+    Limiter,
+}
+
+impl StageId {
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "panner" => Self::Panner,
+            "reverb" => Self::Reverb,
+            "eq" => Self::Eq,
+            "compressor" => Self::Compressor,
+            "saturator" => Self::Saturator,
+            "limiter" => Self::Limiter,
+            _ => return None,
+        })
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Panner => "Binaural panner",
+            Self::Reverb => "Reverb",
+            Self::Eq => "Equaliser",
+            Self::Compressor => "Compressor",
+            Self::Saturator => "Saturator",
+            Self::Limiter => "Limiter",
+        }
+    }
+
+    /// Every processor the rack can hold, in the order a new install runs them.
+    pub fn all() -> [Self; 6] {
+        [
+            Self::Panner,
+            Self::Reverb,
+            Self::Eq,
+            Self::Compressor,
+            Self::Saturator,
+            Self::Limiter,
+        ]
+    }
+}
+
+fn default_order() -> Vec<StageId> {
+    StageId::all().to_vec()
+}
+
+/// Which two signals the rack is given: the stereo pair, or its sum and difference.
+///
+/// Mid/side is the usual way to treat a width problem without touching the centre:
+/// the rack's processors then work on the mono sum and on what the channels do not
+/// share. The panner and the room are left/right tools and read a mid/side pair as
+/// two unrelated channels, so a true mid/side pass keeps them out of the path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StereoMode {
+    /// Left and right, as they arrive.
+    #[default]
+    Lr,
+    /// Mid and side, encoded before the first stage and decoded after the last.
+    Ms,
+}
+
+impl StereoMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "lr" => Self::Lr,
+            "ms" => Self::Ms,
+            _ => return None,
+        })
+    }
+}
+
+/// Mid and side from left and right, the convention the whole rack uses.
+fn encode_mid_side(frame: [f32; 2]) -> [f32; 2] {
+    [(frame[0] + frame[1]) * 0.5, (frame[0] - frame[1]) * 0.5]
+}
+
+/// Left and right from mid and side, the exact inverse of the encoder.
+fn decode_mid_side(frame: [f32; 2]) -> [f32; 2] {
+    [frame[0] + frame[1], frame[0] - frame[1]]
+}
+
+/// Everything the processors need, in one value the interface can read and
 /// replace atomically.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ChainConfig {
+    /// The rack, first processor first. A file written before the rack existed has
+    /// no order and gets the default one, which is the fixed sequence it ran.
+    #[serde(default = "default_order")]
+    pub order: Vec<StageId>,
+    /// The two signals the rack processes. A file written before this switch has no
+    /// value and gets left/right, which is what it ran.
+    #[serde(default)]
+    pub stereo_mode: StereoMode,
     pub panner: PannerConfig,
     pub reverb: ReverbConfig,
     pub eq: EqConfig,
+    pub compressor: CompressorConfig,
+    pub saturator: SaturatorConfig,
     pub limiter: LimiterConfig,
 }
 
 impl Default for ChainConfig {
     fn default() -> Self {
         Self {
+            order: default_order(),
+            stereo_mode: StereoMode::Lr,
             panner: PannerConfig::default(),
             reverb: ReverbConfig::default(),
             eq: EqConfig::default(),
+            compressor: CompressorConfig::default(),
+            saturator: SaturatorConfig::default(),
             limiter: LimiterConfig::default(),
         }
     }
@@ -46,9 +152,20 @@ impl Default for ChainConfig {
 
 impl ChainConfig {
     pub fn validate(&self) -> Result<(), String> {
+        // Every processor runs exactly once. A missing one would silently drop a
+        // stage; a repeated one would run it twice and cost the audio its level.
+        if self.order.len() != StageId::all().len()
+            || StageId::all()
+                .iter()
+                .any(|stage| !self.order.contains(stage))
+        {
+            return Err("The rack must carry each processor exactly once".into());
+        }
         panner::validate(&self.panner)?;
         reverb::validate(&self.reverb)?;
         eq::validate(&self.eq)?;
+        compressor::validate(&self.compressor)?;
+        saturator::validate(&self.saturator)?;
         limiter::validate(&self.limiter)
     }
 }
@@ -60,9 +177,12 @@ pub struct ChainMeters {
     pub gain_reduction_db: f32,
     pub output_peak_db: f32,
     pub wet_mix: f32,
+    pub compressor_reduction_db: f32,
     pub panner_enabled: bool,
     pub reverb_enabled: bool,
     pub eq_enabled: bool,
+    pub compressor_enabled: bool,
+    pub saturator_enabled: bool,
     pub limiter_enabled: bool,
 }
 
@@ -80,6 +200,8 @@ pub struct Chain {
     panner: Panner,
     reverb: Reverb,
     eq: Eq,
+    compressor: Compressor,
+    saturator: Saturator,
     limiter: Limiter,
 }
 
@@ -90,12 +212,15 @@ impl Chain {
             panner: Panner::new(config.panner),
             reverb: Reverb::new(config.reverb),
             eq: Eq::new(&config.eq),
+            compressor: Compressor::new(config.compressor),
+            saturator: Saturator::new(config.saturator),
             limiter: Limiter::new(config.limiter),
         }
     }
 
-    /// One stereo frame in, one processed frame out. The configuration is a
-    /// reference so the realtime path never copies the room's network string.
+    /// One stereo frame in, one processed frame out: the spatial layout, then the
+    /// rack in the order the configuration names. The configuration is a reference
+    /// so the realtime path never copies the room's network string.
     pub fn process(
         &mut self,
         frame: [f32; 2],
@@ -103,10 +228,48 @@ impl Chain {
         config: &ChainConfig,
     ) -> [f32; 2] {
         let placed = self.spatial.process(frame, spatial);
-        let positioned = self.panner.process(placed, config.panner);
-        let roomed = self.reverb.process(positioned, &config.reverb);
-        let corrected = self.eq.process(roomed, &config.eq);
-        self.limiter.process(corrected, config.limiter)
+        self.process_rack(placed, config)
+    }
+
+    /// True when at least one stage would change a sample. A rack with everything
+    /// switched off is a wire, and a wire does not need to be encoded and decoded.
+    fn rack_active(config: &ChainConfig) -> bool {
+        config.panner.enabled
+            || config.reverb.enabled
+            || config.eq.is_active()
+            || config.compressor.enabled
+            || config.saturator.enabled
+            || config.limiter.enabled
+    }
+
+    /// The rack alone, without the spatial layout. The master page renders a file
+    /// through this, so a file is mastered by the processors and not by the mode the
+    /// speakers happen to be in.
+    pub fn process_rack(&mut self, frame: [f32; 2], config: &ChainConfig) -> [f32; 2] {
+        // Encoding only when a stage is live keeps a bypassed rack bit-exact: the
+        // encoder and decoder are inverses, but two float operations per channel do
+        // not have to be spent proving it on every silent frame.
+        let pair = config.stereo_mode == StereoMode::Ms && Self::rack_active(config);
+        let mut signal = if pair {
+            encode_mid_side(frame)
+        } else {
+            frame
+        };
+        for stage in &config.order {
+            signal = match stage {
+                StageId::Panner => self.panner.process(signal, config.panner),
+                StageId::Reverb => self.reverb.process(signal, &config.reverb),
+                StageId::Eq => self.eq.process(signal, &config.eq),
+                StageId::Compressor => self.compressor.process(signal, config.compressor),
+                StageId::Saturator => self.saturator.process(signal, config.saturator),
+                StageId::Limiter => self.limiter.process(signal, config.limiter),
+            };
+        }
+        if pair {
+            decode_mid_side(signal)
+        } else {
+            signal
+        }
     }
 
     pub fn meters(&self, config: &ChainConfig) -> ChainMeters {
@@ -118,9 +281,12 @@ impl Chain {
             } else {
                 0.0
             },
+            compressor_reduction_db: self.compressor.reduction_db(),
             panner_enabled: config.panner.enabled,
             reverb_enabled: config.reverb.enabled,
             eq_enabled: config.eq.is_active(),
+            compressor_enabled: config.compressor.enabled,
+            saturator_enabled: config.saturator.enabled,
             limiter_enabled: config.limiter.enabled,
         }
     }
@@ -216,6 +382,8 @@ impl ChainState {
         !config.panner.enabled
             && !config.reverb.enabled
             && !config.eq.is_active()
+            && !config.compressor.enabled
+            && !config.saturator.enabled
             && !config.limiter.enabled
     }
 
@@ -412,6 +580,75 @@ pub fn set_limiter(
     })
 }
 
+/// The rack order, as stage names. Every processor must appear exactly once; a
+/// list that repeats or drops one is refused, so moving a stage can never lose it.
+#[tauri::command]
+pub fn set_stereo_mode(
+    state: tauri::State<'_, Arc<ChainState>>,
+    mode: String,
+) -> Result<ChainConfig, String> {
+    let mode = StereoMode::parse(&mode).ok_or("Unknown channel mode")?;
+    state.update(|config| config.stereo_mode = mode)
+}
+
+#[tauri::command]
+pub fn set_order(
+    state: tauri::State<'_, Arc<ChainState>>,
+    order: Vec<String>,
+) -> Result<ChainConfig, String> {
+    let mut parsed = Vec::with_capacity(order.len());
+    for name in &order {
+        let stage = StageId::parse(name).ok_or_else(|| format!("Unknown processor: {name}"))?;
+        if parsed.contains(&stage) {
+            return Err(format!("{} is already in the rack", stage.label()));
+        }
+        parsed.push(stage);
+    }
+    state.update(|config| config.order = parsed)
+}
+
+#[tauri::command]
+pub fn set_compressor(
+    state: tauri::State<'_, Arc<ChainState>>,
+    enabled: bool,
+    threshold_db: f32,
+    ratio: f32,
+    attack_ms: f32,
+    release_ms: f32,
+    knee_db: f32,
+    makeup_db: f32,
+) -> Result<ChainConfig, String> {
+    state.update(|config| {
+        config.compressor = CompressorConfig {
+            enabled,
+            threshold_db,
+            ratio,
+            attack_ms,
+            release_ms,
+            knee_db,
+            makeup_db,
+        };
+    })
+}
+
+#[tauri::command]
+pub fn set_saturator(
+    state: tauri::State<'_, Arc<ChainState>>,
+    enabled: bool,
+    drive_db: f32,
+    tone: f32,
+    mix: f32,
+) -> Result<ChainConfig, String> {
+    state.update(|config| {
+        config.saturator = SaturatorConfig {
+            enabled,
+            drive_db,
+            tone,
+            mix,
+        };
+    })
+}
+
 /// The whole equaliser in one call: the band list replaces the running one, so
 /// the interface can never describe a cascade the engine is not running.
 #[tauri::command]
@@ -515,6 +752,7 @@ mod tests {
             gain_db,
             q: 1.4,
             enabled: true,
+            dynamics: None,
         }
     }
 
@@ -685,6 +923,7 @@ mod tests {
             gain_db: 8.0,
             q: 0.7,
             enabled: true,
+            dynamics: None,
         };
         let update = state.set_eq(true, -4.0, vec![edited.clone()]).unwrap();
         let copy = update
@@ -899,6 +1138,148 @@ mod tests {
         }
     }
 
+    fn swapped(first: StageId, second: StageId) -> Vec<StageId> {
+        let order = StageId::all();
+        let mut swapped = order.to_vec();
+        let a = order.iter().position(|stage| *stage == first).unwrap();
+        let b = order.iter().position(|stage| *stage == second).unwrap();
+        swapped[a] = second;
+        swapped[b] = first;
+        swapped
+    }
+
+    #[test]
+    fn the_rack_runs_the_order_it_is_given() {
+        // A boost followed by the limiter is held; the limiter followed by the same
+        // boost is not. If the order list were ignored, both would measure the same.
+        let boost = EqConfig {
+            enabled: true,
+            preamp_db: 0.0,
+            filters: vec![band(1_000.0, 12.0)],
+        };
+        let limiter = LimiterConfig {
+            enabled: true,
+            threshold_db: -6.0,
+            auto_makeup: false,
+            ..LimiterConfig::default()
+        };
+        let held = ChainConfig {
+            order: StageId::all().to_vec(),
+            eq: boost.clone(),
+            limiter,
+            ..ChainConfig::default()
+        };
+        let overshoot = ChainConfig {
+            order: swapped(StageId::Eq, StageId::Limiter),
+            eq: boost,
+            limiter,
+            ..ChainConfig::default()
+        };
+        let held_peak = db(peak(&render(held, |index| tone_at(index, 1_000.0))));
+        let overshoot_peak = db(peak(&render(overshoot, |index| tone_at(index, 1_000.0))));
+        assert!(
+            held_peak <= -5.9,
+            "equaliser before the limiter left {held_peak:.2} dBFS"
+        );
+        assert!(
+            overshoot_peak > held_peak + 3.0,
+            "the order list changed nothing: {overshoot_peak:.2} against {held_peak:.2} dBFS"
+        );
+    }
+
+    #[test]
+    fn a_rack_that_drops_or_repeats_a_stage_is_refused() {
+        let state = ChainState::default();
+        let mut missing = StageId::all().to_vec();
+        missing.pop();
+        assert!(state.update(|config| config.order = missing).is_err());
+        let mut repeated = StageId::all().to_vec();
+        repeated[0] = StageId::Reverb;
+        assert!(state.update(|config| config.order = repeated).is_err());
+        assert_eq!(state.config().order, StageId::all().to_vec());
+    }
+
+    #[test]
+    fn a_reordered_rack_survives_a_restart() {
+        let path = scratch("order");
+        let state = ChainState::load(Store::at(path.clone()));
+        let order = swapped(StageId::Saturator, StageId::Reverb);
+        state
+            .update(|config| config.order = order.clone())
+            .expect("a valid order");
+        assert!(
+            wait_for(&path, "\"order\""),
+            "the order never reached the disk"
+        );
+        let restarted = ChainState::load(Store::at(path.clone()));
+        assert_eq!(restarted.config().order, order);
+        assert_eq!(restarted.config().order.len(), 6);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn mid_and_side_encode_and_decode_are_inverses() {
+        for (left, right) in [(0.3, -0.2), (0.5, 0.5), (-0.1, 0.7)] {
+            let back = decode_mid_side(encode_mid_side([left, right]));
+            assert!((back[0] - left).abs() < 1e-7, "left {} became {}", left, back[0]);
+            assert!((back[1] - right).abs() < 1e-7, "right {} became {}", right, back[1]);
+        }
+        // A centred signal is all mid and no side, which is what makes the switch
+        // worth having for a width problem.
+        let centre = encode_mid_side([0.4, 0.4]);
+        assert!((centre[0] - 0.4).abs() < 1e-7);
+        assert_eq!(centre[1], 0.0);
+    }
+
+    #[test]
+    fn an_idle_rack_in_mid_side_mode_is_still_bit_exact() {
+        let config = ChainConfig {
+            stereo_mode: StereoMode::Ms,
+            ..ChainConfig::default()
+        };
+        let out = render(config, tone);
+        for (index, frame) in out.iter().enumerate() {
+            assert_eq!(frame[0].to_bits(), tone(index)[0].to_bits(), "frame {index}");
+            assert_eq!(frame[1].to_bits(), tone(index)[1].to_bits(), "frame {index}");
+        }
+    }
+
+    #[test]
+    fn the_mid_side_switch_runs_the_rack_on_the_sum_and_the_difference() {
+        // A signal that is loud on the left only. Its mid is half its level and its
+        // side is the other half, so a left-channel detector is hit twice as hard in
+        // left/right as in mid/side — and the limiter therefore limits less.
+        let limiter = LimiterConfig {
+            enabled: true,
+            threshold_db: -12.0,
+            detector: limiter::Detector::Left,
+            auto_makeup: false,
+            ..LimiterConfig::default()
+        };
+        let left_only = |index: usize| [tone(index)[0] * 1.2, 0.05];
+        let lr = render(
+            ChainConfig {
+                limiter,
+                ..ChainConfig::default()
+            },
+            left_only,
+        );
+        let ms = render(
+            ChainConfig {
+                stereo_mode: StereoMode::Ms,
+                limiter,
+                ..ChainConfig::default()
+            },
+            left_only,
+        );
+        let lr_peak = db(peak(&lr));
+        let ms_peak = db(peak(&ms));
+        assert!(
+            ms_peak > lr_peak + 1.0,
+            "mid/side left {ms_peak:.2} dB against left/right {lr_peak:.2} dB: the switch did nothing"
+        );
+    }
+
     #[test]
     fn every_output_stays_finite_with_every_stage_running() {
         let config = ChainConfig {
@@ -930,6 +1311,20 @@ mod tests {
                 preamp_db: -6.0,
                 filters: vec![band(120.0, 12.0), band(6_000.0, -9.0)],
             },
+            compressor: CompressorConfig {
+                enabled: true,
+                threshold_db: -24.0,
+                ratio: 8.0,
+                makeup_db: 6.0,
+                ..CompressorConfig::default()
+            },
+            saturator: SaturatorConfig {
+                enabled: true,
+                drive_db: 12.0,
+                mix: 0.8,
+                ..SaturatorConfig::default()
+            },
+            ..ChainConfig::default()
         };
         let out = render(config, |index| [tone(index)[0] * 1.4, -tone(index)[0] * 1.4]);
         assert!(out.iter().all(|frame| frame[0].is_finite()

@@ -2,16 +2,20 @@
 
 A music player for Windows that shows you what it is doing to the sound.
 
-Audiorium decodes the files on your disk and plays them through five stages of
-DSP you can inspect and adjust: a spatial renderer, a binaural panner, a reverb,
-a 24-band parametric equaliser and a look-ahead limiter. Its meters and its
-spectrum are computed from real audio — the frames it hands to the sound card,
-or a source you point it at — so a change to the chain shows up in what you see
-as well as in what you hear.
+Audiorium decodes the files on your disk and plays them through a spatial renderer
+and a rack of six processors — a binaural panner, a reverb, a 24-band parametric
+equaliser, a compressor, a saturator and a look-ahead limiter — in an order you set
+and can change while the music plays. Its meters and its spectrum are computed from
+real audio — the frames it hands to the sound card, or a source you point it at — so
+a change to the chain shows up in what you see as well as in what you hear.
 
-It runs on one machine and reads one folder. There is no account, no telemetry
-and no network code anywhere in the app. The only files it writes are its own
-settings and a log.
+The same rack runs over a whole file offline on the Master page: it measures the
+loudness before and after, checks the result against a delivery target, and writes a
+WAV or FLAC.
+
+It runs on one machine and reads one folder. There is no account, no telemetry and
+no network code anywhere in the app. The only files it writes are its own settings,
+a log, and the masters you ask it to render.
 
 ![The observatory, with a track playing](screenshots/observatory.png)
 
@@ -35,9 +39,16 @@ it is missing at launch the Windows default is used until it returns.
 
 ## The chain
 
-Every frame passes these five stages in this order. Any of them can be taken out
-of the path, and a bypassed stage is bit-exact: the samples come back out
-unchanged.
+Every frame meets the spatial renderer, then walks a rack of six processors. The
+order is a list the engine runs, not a drawing of one: each strip on the Processors
+page has arrows that move it earlier or later, and moving a stage changes what the
+audio does. The rack can also run on left and right or on mid and side, where the
+processors work on the sum and the difference, so an equaliser can shape the centre
+of a mix without moving its sides. Any stage can be taken out of the path, and a
+bypassed stage is bit-exact: the samples come back out unchanged.
+
+The spatial renderer sits outside the rack because it is the speaker layout rather
+than a processor. A master renders the rack alone.
 
 1. **Spatial renderer.** Six modes. Stereo passes through untouched; 5.1 and 7.1
    place a stereo mix on virtual speakers; binaural applies head shadowing,
@@ -56,20 +67,34 @@ unchanged.
    shelf, low pass, high pass and notch — behind a preamp, with the response
    curve drawn from the coefficients the audio path is actually running. A band
    change is crossfaded over 10 ms so it does not click, and the page reports the
-   headroom the curve leaves.
-5. **Limiter.** A look-ahead peak limiter: 72 samples of look-ahead, an output
+   headroom the curve leaves. A band can also be made dynamic: while that band's
+   own level is above its threshold it is pulled back towards a straight wire, so
+   a quiet verse keeps a boost that a loud chorus does not get doubled.
+5. **Compressor.** Stereo-linked and feed-forward: the louder channel decides, so
+   one loud side ducks the whole image. An over-easy knee at the threshold, a
+   ratio, attack and release (each calibrated to reach 90 % of its change in the
+   stated time) and make-up gain after the reduction. It is not a limiter and
+   holds no ceiling — nothing is delayed, so a fast attack shaves a transient
+   instead of catching it in advance. That is why the limiter comes last.
+6. **Saturator.** A tanh curve run at four times the sample rate and split back
+   down through a windowed-sinc filter, so the harmonics it adds land below the
+   band instead of folding back as aliasing. Drive is input gain into the curve,
+   normalised so a full-scale sample leaves at full scale; Tone tilts the result
+   dark or bright from 2.5 kHz; Mix blends it against the dry signal, delay-matched
+   so a half mix does not comb. It is not an amp sim and not tape: no wow, no bias.
+7. **Limiter.** A look-ahead peak limiter: 72 samples of look-ahead, an output
    level of −0.3 dBFS by default, fast/medium/slow release, both/left/right
    detection, optional soft clip and automatic make-up that normalises the
    limited peak to the output level. The gain works from the threshold and the
    output is one trim after it, so turning the output down is quieter rather than
    more limited. It is not a true-peak limiter and not a loudness normaliser.
 
-The panner, the reverb and the limiter are edited on the Processors page, which
-names what each stage is holding and meters the limiter from the engine; the
-equaliser keeps a page of its own, and the Signal chain page draws all five in
-the order the audio meets them.
+Five of the six are edited on the Processors page, which names what each stage is
+holding, orders them and meters the compressor and the limiter from the engine. The
+equaliser keeps a page of its own, and the Signal chain page draws the whole path
+in the order the audio meets it.
 
-![The Processors page, with all three stages in the path](screenshots/processors.png)
+![The Processors page, with all six stages in the path](screenshots/processors.png)
 
 ## Equaliser patches
 
@@ -93,6 +118,36 @@ that copy active and follows it from then on. All of it survives a restart.
 
 ![The equaliser workspace](screenshots/equaliser.png)
 
+## Mastering
+
+The Master page renders the rack over a whole file, offline and on its own thread
+with its own copy of the chain: playback keeps playing while a render runs, and
+neither can move the other's state. The spatial layout is left out, so a master is
+the rack's work rather than the mode the speakers happened to be in.
+
+Output is WAV or FLAC at 44.1, 48 or 96 kHz, resampled when the file's own rate
+differs. WAV carries 16- or 24-bit PCM, dithered and noise-shaped at 16 bits, or
+32-bit float with no dither; FLAC has no float sample, so choosing it leaves 16 and
+24 bit and packs the same sample codes losslessly, with the sample digest a FLAC
+stream states about itself. A master keeps the source's tags and its cover. Prints
+go to a `Mastered` folder at the library root with `(mastered)` in the name, or
+beside a file that came from outside the library; the source is never overwritten,
+and the library scan skips that folder so a print never comes back as a new track.
+
+The before/after figures come from the same pass as the audio, one meter before the
+rack and one after, and they are BS.1770-4 rather than an approximation: gated
+integrated loudness, loudness range, 4× oversampled true peak, sample peak, DC
+offset and channel correlation. A delivery target — streaming at −14 LUFS, podcast
+at −16, broadcast at −23, or none — is judged within half a unit and under the
+ceiling. It is a check and never a normaliser: the gain that would close a gap is
+stated and not applied. After a render the page can play the source and the master
+back to back at matched loudness, both without the rack, and measure a reference
+track to compare a master against. Two further cards read the whole file — its
+envelope, loudness and spectrum — and run a bypass test that renders with every
+stage out and says whether the result is sample-identical to the source.
+
+![The Master page after a render](screenshots/master.png)
+
 ## Measurement
 
 The Analysis page draws a 2048-sample Hann FFT folded into 56 logarithmic bands
@@ -102,8 +157,9 @@ spectrum is drawn as a surface: every frame from the last half second sits behin
 the live curve, so you can see where the music has just been. Pausing freezes the
 readings where they are; stopping fades them out.
 
-Everything is labelled for what it is. Levels are dBFS, not LUFS, and the app
-says so where it shows them. An idle engine reports a dash instead of inventing a
+Everything is labelled for what it is. The levels on this page are dBFS, and the
+app says so where it shows them; programme loudness in LUFS is measured over
+blocks, on the Master page. An idle engine reports a dash instead of inventing a
 number, and the observatory settles back to a plain sphere.
 
 ![The analysis workspace while a tone plays](screenshots/analysis.png)
@@ -153,16 +209,18 @@ cargo test --manifest-path src-tauri/Cargo.toml # Rust, including all the DSP
 ```
 
 The Rust suite covers the parts where being wrong is not visible on screen: the
-limiter holding its ceiling, the panner's symmetry, the reverb's seeded
-reproducibility, the equaliser's measured response, and bit-exact bypass for
-every stage. The frontend suite covers the scene's geometry, the readings it
-derives from the engine, and the workspace components.
+limiter holding its ceiling, the compressor's knee and release, the saturator's
+oversampling, the panner's symmetry, the reverb's seeded reproducibility, the
+equaliser's measured response, bit-exact bypass for every stage, and a master that
+comes back sample-identical when the rack is out. The frontend suite covers the
+scene's geometry, the readings it derives from the engine, the delivery-target
+check, and the workspace components.
 
 ## Where your data goes
 
 | Path | What is there |
 | --- | --- |
-| `%APPDATA%\AUDIORIUM\state.json` | the chain settings and every saved patch |
+| `%APPDATA%\AUDIORIUM\state.json` | the chain settings, the rack order and every saved patch |
 | `%APPDATA%\AUDIORIUM\window.json` | where the window was left |
 | `%APPDATA%\AUDIORIUM\audiorium.log` | the launch line and any panic, capped at 256 KB |
 
@@ -173,12 +231,16 @@ storage. Deleting
 and `AUDIORIUM_LOG_PATH` move the folder and the log, which is how the tests keep
 their own.
 
+A master is written next to the music rather than in that folder: `Mastered` at the
+library root, or beside a file that was never in the library.
+
 ## Layout
 
 ```
 src/                          React frontend: workspaces, instruments, scene
-src-tauri/src/                Rust: decoder, chain, five DSP stages, analysis,
-                              capture, devices, library, settings
+src-tauri/src/                Rust: decoder, spatial renderer, six processors,
+                              analysis, programme loudness, offline render and
+                              export, capture, devices, library, settings
 src-tauri/assets/corrections/ published headphone profiles and their sources
 tools/                        the scripts that fitted the two LAN 2 profiles
 docs/                         audio architecture, dependency and license record,
@@ -189,12 +251,19 @@ docs/                         audio architecture, dependency and license record,
 
 - It is Windows-only. The audio path, the device dialogs and the spatial output
   are Windows APIs, and no other platform has been attempted.
-- Output is one shared-mode stream at 48 kHz, so nothing is bit-perfect, nothing
-  uses exclusive mode, and high-resolution files are resampled.
+- Playback is one shared-mode stream at 48 kHz, so nothing is bit-perfect, nothing
+  uses exclusive mode, and high-resolution files are resampled. A master is
+  written at the rate you pick, but it is rendered offline rather than played back
+  bit-perfect.
 - The queue is the scanned folder order held in memory: no playlists, no gapless
   playback, no resume point and no play counts.
-- There is no loudness measurement (LUFS), no true peak, no spectrogram, no
-  offline file analysis, no convolution and no VST hosting.
+- There is no convolution, no VST hosting, no multiband compression and no
+  spectrogram of a live stream. The compressor is single-band, the saturator is
+  not an amplifier model, and nothing here is a true-peak limiter: the limiter
+  holds sample peaks, so a master's true peak can sit above what it held, which is
+  exactly what the Master page measures.
+- A delivery target is a check, not a normaliser. Nothing applies loudness
+  normalisation or a limiter for you on the way out.
 - The Atmos mode needs spatial sound enabled for the selected output in Windows.
   A stereo file carries no objects, so the bed is derived, and no Atmos bitstream
   is decoded anywhere.
@@ -218,8 +287,9 @@ matters:
   to settle before any commercial use.
 - Inter and IBM Plex Mono are self-hosted under the SIL Open Font License 1.1,
   with both license files beside the fonts in `src/assets/fonts/`.
-- Every Rust and JavaScript dependency, its version, license and role in the app
-  is listed in `docs/DEPENDENCIES_AND_LICENSES.md`.
+- The FLAC encoder a master is written with is `flacenc`, Apache-2.0, linked
+  unmodified. Every other Rust and JavaScript dependency, its version, license and
+  role in the app is listed in `docs/DEPENDENCIES_AND_LICENSES.md`.
 
 ## License
 

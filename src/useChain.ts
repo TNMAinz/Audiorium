@@ -1,12 +1,20 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  defaultChain, defaultEq, emptyPresets, eqLimits, idleEqResponse, idleMeters,
-  type ChainMeters, type ChainSettings, type EqFilter, type EqPresetList, type EqResponse,
-  type EqSettings, type LimiterSettings, type PannerSettings, type ReverbSettings,
+  defaultChain, defaultEq, emptyPresets, eqLimits, idleEqResponse, idleMeters, isStageOrder,
+  type ChainMeters, type ChainSettings, type CompressorSettings, type EqFilter, type EqPresetList,
+  type EqResponse, type EqSettings, type LimiterSettings, type PannerSettings,
+  type ReverbSettings, type SaturatorSettings, type StageId, type StereoMode,
 } from './model';
 
 const normalizeMeters = (incoming: Partial<ChainMeters>): ChainMeters => ({ ...idleMeters, ...incoming });
+/** A chain from an older build has no order: it gets the sequence that build ran. */
+const normalizeChain = (incoming: Partial<ChainSettings> | null | undefined): ChainSettings => ({
+  ...defaultChain,
+  ...incoming,
+  order: isStageOrder(incoming?.order) ? incoming.order : defaultChain.order,
+  stereoMode: incoming?.stereoMode === 'ms' ? 'ms' : 'lr',
+});
 
 /** An equaliser edit and the patch list it produced, as the engine returns them. */
 interface EqUpdate { chain: ChainSettings; presets: EqPresetList }
@@ -40,7 +48,7 @@ export function useChain(suspended = false) {
     if (!native) return;
     let active = true;
     invoke<ChainSettings>('chain_config')
-      .then(next => { if (active) setChain({ ...defaultChain, ...next }); })
+      .then(next => { if (active) setChain(normalizeChain(next)); })
       .catch(reason => { if (active) setError(String(reason)); });
     invoke<EqPresetList>('eq_presets')
       .then(next => { if (active) setPresets(normalizePresets(next)); })
@@ -96,7 +104,7 @@ export function useChain(suspended = false) {
     try {
       const next = await run();
       if (token !== sent.current) return;
-      setChain({ ...defaultChain, ...next });
+      setChain(normalizeChain(next));
       setError('');
     } catch (reason) {
       if (token !== sent.current) return;
@@ -105,7 +113,7 @@ export function useChain(suspended = false) {
       // rather than the value that was refused.
       try {
         const actual = await invoke<ChainSettings>('chain_config');
-        setChain({ ...defaultChain, ...actual });
+        setChain(normalizeChain(actual));
       } catch {
         // Nothing more to report: the error above already names the reason.
       }
@@ -136,6 +144,43 @@ export function useChain(suspended = false) {
     }));
   }, [chain.reverb, send]);
 
+  const setCompressor = useCallback((patch: Partial<CompressorSettings>) => {
+    const next = { ...chain.compressor, ...patch };
+    setChain(current => ({ ...current, compressor: next }));
+    void send(() => invoke<ChainSettings>('set_compressor', {
+      enabled: next.enabled,
+      thresholdDb: next.thresholdDb,
+      ratio: next.ratio,
+      attackMs: next.attackMs,
+      releaseMs: next.releaseMs,
+      kneeDb: next.kneeDb,
+      makeupDb: next.makeupDb,
+    }));
+  }, [chain.compressor, send]);
+
+  const setSaturator = useCallback((patch: Partial<SaturatorSettings>) => {
+    const next = { ...chain.saturator, ...patch };
+    setChain(current => ({ ...current, saturator: next }));
+    void send(() => invoke<ChainSettings>('set_saturator', {
+      enabled: next.enabled,
+      driveDb: next.driveDb,
+      tone: next.tone,
+      mix: next.mix,
+    }));
+  }, [chain.saturator, send]);
+
+  /** The rack order. The engine refuses a list that repeats or drops a stage. */
+  const setOrder = useCallback((order: StageId[]) => {
+    setChain(current => ({ ...current, order }));
+    void send(() => invoke<ChainSettings>('set_order', { order }));
+  }, [send]);
+
+  /** Which pair the rack processes: left/right, or mid/side. */
+  const setStereoMode = useCallback((mode: StereoMode) => {
+    setChain(current => ({ ...current, stereoMode: mode }));
+    void send(() => invoke<ChainSettings>('set_stereo_mode', { mode }));
+  }, [send]);
+
   const setLimiter = useCallback((patch: Partial<LimiterSettings>) => {
     const next = { ...chain.limiter, ...patch };
     setChain(current => ({ ...current, limiter: next }));
@@ -162,7 +207,7 @@ export function useChain(suspended = false) {
     invoke<EqUpdate>('set_eq', { enabled: next.enabled, preampDb: next.preampDb, filters: next.filters })
       .then(update => {
         if (token !== sent.current) return;
-        setChain({ ...defaultChain, ...update.chain });
+        setChain(normalizeChain(update.chain));
         setPresets(normalizePresets(update.presets));
         setError('');
       })
@@ -170,7 +215,7 @@ export function useChain(suspended = false) {
         if (token !== sent.current) return;
         setError(String(reason));
         try {
-          setChain({ ...defaultChain, ...(await invoke<ChainSettings>('chain_config')) });
+          setChain(normalizeChain(await invoke<ChainSettings>('chain_config')));
         } catch {
           // The message above already names the reason.
         }
@@ -183,7 +228,7 @@ export function useChain(suspended = false) {
     setPatchError('');
     invoke<EqUpdate>('apply_eq_preset', { id })
       .then(update => {
-        setChain({ ...defaultChain, ...update.chain });
+        setChain(normalizeChain(update.chain));
         setPresets(normalizePresets(update.presets));
       })
       .catch(reason => setPatchError(String(reason)));
@@ -254,7 +299,7 @@ export function useChain(suspended = false) {
 
   return {
     native, chain, meters, eqCurve, error, presets, patchError,
-    setPanner, setReverb, setLimiter, randomizeReverb,
+    setPanner, setReverb, setLimiter, setCompressor, setSaturator, setOrder, setStereoMode, randomizeReverb,
     setEq, updateFilter, addFilter, removeFilter, resetEq, matchHeadroom,
     applyPreset, renamePreset, deletePreset,
   };

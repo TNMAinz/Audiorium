@@ -173,7 +173,7 @@ impl AnalysisState {
     }
 }
 
-fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
+pub(crate) fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
     let n = re.len();
     debug_assert!(n.is_power_of_two());
     let mut j = 0usize;

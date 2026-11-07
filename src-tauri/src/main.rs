@@ -4,12 +4,17 @@ mod analysis;
 mod artwork;
 mod autoeq;
 mod chain;
+mod compressor;
 mod eq;
+mod export;
+mod loudness;
+mod saturator;
 mod library;
 mod limiter;
 mod log;
 mod panner;
 mod presets;
+mod resample;
 mod reverb;
 mod spatial;
 mod store;
@@ -23,10 +28,15 @@ mod capture;
 #[cfg(windows)]
 mod driver;
 #[cfg(windows)]
+mod filescan;
+#[cfg(windows)]
 mod player;
+#[cfg(windows)]
+mod render;
 #[cfg(windows)]
 mod spatial_out;
 
+use std::sync::Arc;
 use tauri::Manager;
 
 fn main() {
@@ -50,8 +60,10 @@ fn main() {
             audio_state.chain_handle(),
             audio_state.spatial_handle(),
         );
+        let render_state = Arc::new(render::RenderState::new());
         builder
             .manage(audio_state.chain_handle())
+            .manage(render_state)
             .manage(audio_state.analysis_handle())
             .manage(audio_state)
             .manage(capture_state)
@@ -77,11 +89,17 @@ fn main() {
                 player::stop_playback,
                 player::seek_playback,
                 player::set_playback_volume,
+                player::set_monitor_trim,
+                player::set_monitor_direct,
                 chain::chain_config,
                 chain::chain_meters,
                 chain::set_panner,
                 chain::set_reverb,
                 chain::set_limiter,
+                chain::set_order,
+                chain::set_stereo_mode,
+                chain::set_compressor,
+                chain::set_saturator,
                 chain::set_eq,
                 chain::eq_response,
                 chain::eq_presets,
@@ -90,6 +108,14 @@ fn main() {
                 chain::delete_eq_preset,
                 chain::random_reverb_network,
                 chain::panner_timbres,
+                render::master_destination,
+                render::render_start,
+                render::render_album,
+                render::render_status,
+                render::render_cancel,
+                render::reference_measure,
+                render::null_test,
+                filescan::scan_file,
                 artwork::track_artwork,
                 library::scan_library,
                 library::choose_library_folder,

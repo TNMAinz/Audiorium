@@ -10,13 +10,20 @@
 //! The gain works from the threshold; Output is a constant trim after it, so a
 //! lower output level is quieter, not more limited.
 //!
+//! It is a true-peak limiter: the detector judges a frame by the peak of a four
+//! times oversampled interpolation of the recent samples, using the same
+//! windowed-sinc branches the loudness meter measures true peak with, so the
+//! ceiling the stage holds is a dBTP figure and not just a sample peak. That
+//! matters because a sample peak limiter can leave an inter-sample crest above the
+//! ceiling, which the encoder or the listener's D/A then clips flat.
+//!
 //! It is not a loudness normaliser: nothing here measures LUFS, and there is no
-//! programme-dependent auto-gain. It is not a true-peak limiter either, because
-//! nothing is oversampled, so inter-sample peaks are estimated by the sample
-//! peak. It does not model analogue clipping.
+//! programme-dependent auto-gain. It does not model analogue clipping.
 
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+
+use crate::loudness::{interpolation, PHASES, TAPS};
 
 /// 1.5 ms at the 48 kHz rate the whole application runs at.
 pub const LOOKAHEAD: usize = 72;
@@ -150,6 +157,12 @@ pub struct Limiter {
     gain: f32,
     reduction: f32,
     peak: f32,
+    /// The four-times oversampling the detector judges a frame with, and the
+    /// samples it needs around that frame. Same branches as `loudness.rs`, so the
+    /// limiter and the meter agree about what a true peak is.
+    phases: [[f32; TAPS]; PHASES],
+    history: [[f32; TAPS]; 2],
+    head: usize,
 }
 
 impl Limiter {
@@ -161,6 +174,9 @@ impl Limiter {
             gain: 1.0,
             reduction: 0.0,
             peak: 0.0,
+            phases: interpolation(),
+            history: [[0.0; TAPS]; 2],
+            head: 0,
         }
     }
 
@@ -172,6 +188,8 @@ impl Limiter {
             self.reduction = 0.0;
             self.delay.clear();
             self.window.clear();
+            self.history = [[0.0; TAPS]; 2];
+            self.head = 0;
             let level = frame[0].abs().max(frame[1].abs());
             self.peak = if level > self.peak { level } else { self.peak * METER_DECAY };
             // Bypass is exact: the same samples come back out.
@@ -189,10 +207,18 @@ impl Limiter {
             0.0
         };
         let threshold_linear = db_to_linear(threshold);
+        // The detector reads the oversampled peak, not the sample peak: an
+        // inter-sample crest between two quiet samples is exactly what a sample
+        // peak limiter lets through and the encoder then clips.
+        let left = self.oversampled(0, frame[0]);
+        let right = self.oversampled(1, frame[1]);
+        self.history[0][self.head] = frame[0];
+        self.history[1][self.head] = frame[1];
+        self.head = (self.head + 1) % TAPS;
         let detector = match config.detector {
-            Detector::Both => frame[0].abs().max(frame[1].abs()),
-            Detector::Left => frame[0].abs(),
-            Detector::Right => frame[1].abs(),
+            Detector::Both => left.max(right),
+            Detector::Left => left,
+            Detector::Right => right,
         };
         self.window.push_back(detector);
         // One sample more than the delay, so the sample this head is about to emit is
@@ -279,6 +305,23 @@ impl Limiter {
         let level = out[0].abs().max(out[1].abs());
         self.peak = if level > self.peak { level } else { self.peak * METER_DECAY };
         out
+    }
+
+    /// The peak of the four-times oversampled signal ending at this sample.
+    fn oversampled(&self, channel: usize, sample: f32) -> f32 {
+        let mut best = sample.abs();
+        for phase in &self.phases {
+            let mut sum = 0.0f32;
+            for (tap, coefficient) in phase.iter().enumerate() {
+                let age = (self.head + TAPS - tap) % TAPS;
+                let value = if tap == 0 { sample } else { self.history[channel][age] };
+                sum += coefficient * value;
+            }
+            if sum.is_finite() {
+                best = best.max(sum.abs());
+            }
+        }
+        best
     }
 
     /// Gain reduction currently applied, in dB, zero or negative.
@@ -583,6 +626,62 @@ mod tests {
             assert!(*peak <= ceiling + 1e-4, "channel {channel} left {peak} above the ceiling");
         }
         assert!(limiter.reduction_db() < -2.0, "{}", limiter.reduction_db());
+    }
+
+    #[test]
+    fn an_inter_sample_crest_is_held_under_the_ceiling() {
+        // A quarter of the sample rate at 45 degrees of phase: every sample sits at
+        // 0.707 of the tone's real peak, so the sample peak reads -3 dBFS while the
+        // waveform between the samples reaches full scale. A sample-peak limiter
+        // hears nothing to do here and lets the encoder clip the crest; a true-peak
+        // detector has to pull about 3 dB out of it.
+        let config = LimiterConfig {
+            threshold_db: -3.0,
+            ceiling_db: -3.0,
+            auto_makeup: true,
+            ..base()
+        };
+        let ceiling = db_to_linear(-3.0);
+        let mut limiter = Limiter::new(config);
+        let mut output: Vec<[f32; 2]> = Vec::with_capacity(20_000);
+        for index in 0..20_000 {
+            let angle = std::f32::consts::FRAC_PI_4
+                + 2.0 * std::f32::consts::PI * 12_000.0 * index as f32 / RATE;
+            let input = [angle.sin(), angle.sin()];
+            output.push(limiter.process(input, config));
+        }
+
+        // The peak of the four-times oversampled tail, computed here rather than by
+        // the meter: a meter started mid-signal has a cold filter for its first
+        // samples, and that onset would be read as a peak the limiter never made.
+        let phases = interpolation();
+        let tail = output.len() - 4_800;
+        let mut true_peak = 0.0f32;
+        let mut sample_peak = 0.0f32;
+        for index in tail..output.len() {
+            sample_peak = sample_peak.max(output[index][0].abs());
+            for phase in &phases {
+                let mut sum = 0.0f32;
+                for tap in 0..TAPS {
+                    sum += phase[tap] * output[index - tap][0];
+                }
+                true_peak = true_peak.max(sum.abs());
+            }
+        }
+        let true_peak_db = linear_to_db(true_peak);
+        assert!(
+            true_peak_db <= -3.0 + 0.1,
+            "the master left {true_peak_db:.2} dBTP above a -3.0 dBTP ceiling"
+        );
+        assert!(
+            sample_peak < true_peak * 0.8,
+            "the output carries no inter-sample crest to judge: sample {sample_peak}, true {true_peak}"
+        );
+        // Holding the crest costs the samples: they land near -6 dBFS, not at the
+        // -3 dBFS ceiling a sample-peak detector would have aimed for.
+        assert!(sample_peak <= ceiling, "the output left {sample_peak} above the ceiling");
+        assert!(sample_peak > 0.4, "the tone was muted rather than limited: {sample_peak}");
+        assert!(limiter.reduction_db() < -2.5, "{}", limiter.reduction_db());
     }
 
     #[test]

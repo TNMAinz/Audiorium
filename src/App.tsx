@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, AudioWaveform, Boxes, Disc3, Headphones, Home, SlidersHorizontal, SlidersVertical } from 'lucide-react';
+import { Activity, AudioWaveform, Boxes, Disc3, Headphones, Home, SlidersHorizontal, SlidersVertical, Stamp } from 'lucide-react';
 import { AlbumGlobe } from './components/AlbumGlobe';
 import { AudioInspector } from './components/AudioInspector';
 import { PlayerBar } from './components/PlayerBar';
@@ -10,6 +10,7 @@ import { useInputHeard, useLibrary, useSpatialLayout, useWindowAway } from './ho
 import { usePlayer } from './usePlayer';
 import { useArtwork } from './useArtwork';
 import { useChain } from './useChain';
+import { useRender } from './useRender';
 import { localMotionStorage, readReducedMotion, writeReducedMotion } from './motion';
 import { localThemeStorage, readTheme, writeTheme } from './themeMemory';
 import { SpatialFieldPage } from './pages/SpatialFieldPage';
@@ -17,6 +18,7 @@ import { AnalysisPage } from './pages/AnalysisPage';
 import { SignalChainPage } from './pages/SignalChainPage';
 import { ProcessorsPage } from './pages/ProcessorsPage';
 import { EqualiserPage } from './pages/EqualiserPage';
+import { MasterPage } from './pages/MasterPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { LibraryPage } from './pages/LibraryPage';
 
@@ -27,6 +29,7 @@ const nav: { name: Workspace; label: string; icon: typeof Home; group: 'Explore'
   { name: 'Flow', label: 'Signal chain', icon: SlidersHorizontal, group: 'Explore' },
   { name: 'Processors', label: 'Processors', icon: SlidersVertical, group: 'Explore' },
   { name: 'Eq', label: 'Equaliser', icon: AudioWaveform, group: 'Explore' },
+  { name: 'Master', label: 'Master', icon: Stamp, group: 'Explore' },
   { name: 'Library', label: 'Library', icon: Disc3, group: 'System' },
   { name: 'Devices', label: 'Devices', icon: Headphones, group: 'System' },
 ];
@@ -59,6 +62,9 @@ export function App() {
   const deckPaths = useMemo(() => (player.status.active ? [player.status.path] : []), [player.status.active, player.status.path]);
   const deckArtwork = useArtwork(library.result?.root ?? '', deckPaths);
   const chain = useChain(away);
+  // Rendering is not a playback concern: its thread runs on the engine's side and the
+  // page only reports what it says, so a render carries on while the user is elsewhere.
+  const render = useRender(library.result?.root ?? '');
 
   return <div className="app" data-theme={theme.toLowerCase()} data-workspace={workspace}>
     <AlbumGlobe theme={theme} reducedMotion={reduceMotion} active={workspace === 'Orbit'} suspended={away} levels={analysis.levels} library={library} player={player} inputHeard={inputHeard} onLibrary={() => setWorkspace('Library')} />
@@ -80,6 +86,7 @@ export function App() {
         {workspace === 'Flow' && <SignalChainPage audio={analysis} chain={chain} track={player.status.active ? player.status.title : ''} volume={player.status.volume} onVolume={volume => void player.setVolume(volume)} onOpenProcessors={() => setWorkspace('Processors')} onOpenEq={() => setWorkspace('Eq')} />}
         {workspace === 'Processors' && <ProcessorsPage chain={chain} onOpenEq={() => setWorkspace('Eq')} />}
         {workspace === 'Eq' && <EqualiserPage chain={chain} />}
+        {workspace === 'Master' && <MasterPage library={library} player={player} chain={chain} render={render} />}
         {workspace === 'Library' && <LibraryPage library={library} player={player} />}
         {workspace === 'Devices' && <DevicesPage audio={analysis} error={player.error} />}
       </div>}

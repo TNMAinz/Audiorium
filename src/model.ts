@@ -24,15 +24,16 @@ export function formatGain(gain: number) {
   return `${Math.round(gain * 100)} % · ${Number.isFinite(db) ? `${db > 0 ? '+' : '−'}${Math.abs(db).toFixed(1)} dB` : '−∞ dB'}`;
 }
 
-export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Processors' | 'Eq' | 'Spatial' | 'Library' | 'Devices';
+export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Processors' | 'Eq' | 'Master' | 'Spatial' | 'Library' | 'Devices';
 export type Theme = 'Ion' | 'Violet' | 'Ember';
 
 export const workspaces: Record<Workspace, { label: string; title: string; description: string }> = {
   Orbit: { label: 'Observatory', title: 'Observatory', description: 'The scene, driven by what you are playing.' },
   Spectrum: { label: 'Analysis', title: 'Analysis', description: 'Levels and spectrum of what leaves the app.' },
   Flow: { label: 'Signal chain', title: 'Signal chain', description: 'Every stage between the decoded file and the output.' },
-  Processors: { label: 'Processors', title: 'Processors', description: 'The panner, the room and the limiter, in the order the audio reaches them.' },
+  Processors: { label: 'Processors', title: 'Processors', description: 'The six processors, in the order the audio reaches them.' },
   Eq: { label: 'Equaliser', title: 'Equaliser', description: 'The parametric bands the audio path is running.' },
+  Master: { label: 'Master', title: 'Master', description: 'Export a file through the rack, and measure it before and after.' },
   Spatial: { label: 'Spatial field', title: 'Spatial field', description: 'The virtual speakers the renderer is using.' },
   Library: { label: 'Library', title: 'Library', description: 'Local files, decoded in the app.' },
   Devices: { label: 'Devices', title: 'Devices', description: 'Output devices and their roles.' },
@@ -86,7 +87,14 @@ export interface LimiterSettings {
 }
 /** The six biquads the Rust engine implements, and nothing it does not. */
 export type EqKind = 'peaking' | 'lowshelf' | 'highshelf' | 'lowpass' | 'highpass' | 'notch';
-export interface EqFilter { kind: EqKind; frequency: number; gainDb: number; q: number; enabled: boolean }
+/** A band that gives way when its own region is loud: frequency-dependent compression. */
+export interface BandDynamics { thresholdDb: number; ratio: number; attackMs: number; releaseMs: number }
+export const defaultDynamics: BandDynamics = { thresholdDb: -24, ratio: 3, attackMs: 10, releaseMs: 200 };
+export interface EqFilter {
+  kind: EqKind; frequency: number; gainDb: number; q: number; enabled: boolean;
+  /** Absent on a static band, which is every band saved before dynamics existed. */
+  dynamics?: BandDynamics | null;
+}
 export interface EqSettings { enabled: boolean; preampDb: number; filters: EqFilter[] }
 /** The cascade's gain at each frequency, from the coefficients in the audio path. */
 export interface EqResponse { frequencies: number[]; gains: number[]; maxBoostDb: number; headroomDb: number }
@@ -128,6 +136,13 @@ export const eqLimits = {
   q: { min: 0.1, max: 18 },
   preamp: { min: -36, max: 0, step: 0.5 },
   bands: 24,
+  /** The engine's own range for a dynamic band. */
+  dynamics: {
+    threshold: { min: -60, max: 0, step: 1 },
+    ratio: { min: 1, max: 20, step: 0.5 },
+    attack: { min: 0.5, max: 200, step: 0.5 },
+    release: { min: 10, max: 2000, step: 10 },
+  },
 };
 export const defaultEq: EqSettings = { enabled: false, preampDb: 0, filters: [] };
 export const idleEqResponse: EqResponse = { frequencies: [], gains: [], maxBoostDb: 0, headroomDb: 0 };
@@ -158,22 +173,131 @@ export function describeEq(eq: EqSettings) {
   return `${bands} ${bands === 1 ? 'band' : 'bands'} · preamp ${formatDb(eq.preampDb)}`;
 }
 
-export interface ChainSettings { panner: PannerSettings; reverb: ReverbSettings; eq: EqSettings; limiter: LimiterSettings }
+/** One processor in the rack. The engine runs each of these exactly once. */
+export type StageId = 'panner' | 'reverb' | 'eq' | 'compressor' | 'saturator' | 'limiter';
+/** The two signals the rack processes: the stereo pair, or its sum and difference. */
+export type StereoMode = 'lr' | 'ms';
+export const stereoModes: { id: StereoMode; label: string; note: string }[] = [
+  { id: 'lr', label: 'L / R', note: 'Left and right, as they arrive.' },
+  { id: 'ms', label: 'M / S', note: 'Mid and side, encoded before the first stage and decoded after the last. The panner and the room are left/right tools: leave them out of a true mid/side pass.' },
+];
+export interface CompressorSettings {
+  enabled: boolean; thresholdDb: number; ratio: number;
+  attackMs: number; releaseMs: number; kneeDb: number; makeupDb: number;
+}
+export interface SaturatorSettings { enabled: boolean; driveDb: number; tone: number; mix: number }
+export interface ChainSettings {
+  /** The rack, first processor first: the order the audio actually travels. */
+  order: StageId[];
+  /** Which pair the rack processes. A chain saved before this switch has none. */
+  stereoMode: StereoMode;
+  panner: PannerSettings; reverb: ReverbSettings; eq: EqSettings;
+  compressor: CompressorSettings; saturator: SaturatorSettings; limiter: LimiterSettings;
+}
 export interface ChainMeters {
-  gainReductionDb: number; outputPeakDb: number; wetMix: number;
-  pannerEnabled: boolean; reverbEnabled: boolean; eqEnabled: boolean; limiterEnabled: boolean;
+  gainReductionDb: number; outputPeakDb: number; wetMix: number; compressorReductionDb: number;
+  pannerEnabled: boolean; reverbEnabled: boolean; eqEnabled: boolean;
+  compressorEnabled: boolean; saturatorEnabled: boolean; limiterEnabled: boolean;
+}
+
+/** The order a new install runs, which is the fixed sequence the rack replaced. */
+export const defaultOrder: StageId[] = ['panner', 'reverb', 'eq', 'compressor', 'saturator', 'limiter'];
+export const stageNames: Record<StageId, string> = {
+  panner: 'Binaural panner', reverb: 'Reverb', eq: 'Equaliser',
+  compressor: 'Compressor', saturator: 'Saturator', limiter: 'Limiter',
+};
+export const stageModels: Record<StageId, string> = {
+  panner: 'spherical head', reverb: 'seeded delay network', eq: 'parametric cascade',
+  compressor: 'stereo-linked', saturator: 'soft saturation', limiter: 'look-ahead true peak',
+};
+
+/** True when the list carries every processor exactly once, which is what the engine accepts. */
+export const isStageOrder = (order: unknown): order is StageId[] =>
+  Array.isArray(order) && order.length === defaultOrder.length
+  && defaultOrder.every(stage => order.includes(stage));
+
+/** One move of the rack: earlier or later, never past either end. */
+export function moveStage(order: StageId[], from: number, to: number): StageId[] {
+  if (from === to || from < 0 || to < 0 || from >= order.length || to >= order.length) return order;
+  const next = order.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
 }
 
 export const defaultChain: ChainSettings = {
+  order: defaultOrder,
+  stereoMode: 'lr',
   panner: { enabled: false, azimuth: 0, elevation: 0, width: 0.25, room: false, reflectionLength: 0.35, reflectionLevel: 0.2, timbre: 0, focus: 0.5 },
   reverb: { enabled: false, decay: 0.55, dry: 1, wet: 0.3, network: 'woven:4211' },
   eq: defaultEq,
+  compressor: { enabled: false, thresholdDb: -20, ratio: 3, attackMs: 10, releaseMs: 200, kneeDb: 6, makeupDb: 0 },
+  saturator: { enabled: false, driveDb: 6, tone: 0.5, mix: 1 },
   limiter: { enabled: false, thresholdDb: -3, ceilingDb: -0.3, release: 'medium', detector: 'both', softClip: false, autoMakeup: true },
 };
 export const idleMeters: ChainMeters = {
-  gainReductionDb: 0, outputPeakDb: -120, wetMix: 0,
-  pannerEnabled: false, reverbEnabled: false, eqEnabled: false, limiterEnabled: false,
+  gainReductionDb: 0, outputPeakDb: -120, wetMix: 0, compressorReductionDb: 0,
+  pannerEnabled: false, reverbEnabled: false, eqEnabled: false,
+  compressorEnabled: false, saturatorEnabled: false, limiterEnabled: false,
 };
+
+/** What the master page reports while and after a render. */
+export type BitDepth = '16' | '24' | '32f';
+export const bitDepths: { id: BitDepth; label: string }[] = [
+  { id: '16', label: '16-bit PCM' }, { id: '24', label: '24-bit PCM' }, { id: '32f', label: '32-bit float' },
+];
+/** The container a master is written in: uncompressed WAV, or lossless FLAC. */
+export type MasterFormat = 'wav' | 'flac';
+export const masterFormats: { id: MasterFormat; label: string }[] = [
+  { id: 'wav', label: 'WAV' }, { id: 'flac', label: 'FLAC' },
+];
+/** FLAC carries integer samples only, so 32-bit float is a WAV answer. */
+export const depthsFor = (format: MasterFormat) =>
+  format === 'flac' ? bitDepths.filter(option => option.id !== '32f') : bitDepths;
+export interface LoudnessReadings {
+  integratedLufs: number; shortTermLufs: number; momentaryLufs: number; loudnessRange: number;
+  truePeakDb: number; samplePeakDb: number; dcOffsetDb: number; correlation: number; blocks: number;
+}
+/** The rates a master can be written at. The rack always runs at 48 kHz. */
+export type SampleRate = '44.1' | '48' | '96';
+export const masterRates: { id: SampleRate; label: string }[] = [
+  { id: '44.1', label: '44.1 kHz' }, { id: '48', label: '48 kHz' }, { id: '96', label: '96 kHz' },
+];
+export const rateLabel = (rate: SampleRate) =>
+  masterRates.find(option => option.id === rate)?.label ?? `${rate} kHz`;
+
+export interface RenderStatus {
+  running: boolean; phase: string; progress: number; frames: number; seconds: number;
+  bytes: number; destination: string; depth: string;
+  /** The rate the file is written at, and the track of a queue being written. */
+  rate: string; track: string; trackIndex: number; trackTotal: number;
+  /** The whole queue's programme loudness, once every track is written. */
+  albumLufs: number;
+  source: LoudnessReadings; output: LoudnessReadings; error: string;
+}
+/** A file looked at whole: the pictures the Master page draws it with. */
+export interface FileScan {
+  frames: number; seconds: number;
+  /** Peak per bucket, 0…1, in time order. */
+  envelope: number[];
+  /** LUFS over time, in time order. */
+  loudness: number[];
+  columns: number; bands: number;
+  /** `columns × bands` values, column by column, 0…1. */
+  spectrum: number[];
+}
+/** What the bypassed rack did to a file: nothing is the answer a render path wants. */
+export interface NullReport { frames: number; differing: number; maxDifferenceDb: number }
+export const idleLoudness: LoudnessReadings = {
+  integratedLufs: -70, shortTermLufs: -70, momentaryLufs: -70, loudnessRange: 0,
+  truePeakDb: -120, samplePeakDb: -120, dcOffsetDb: -120, correlation: 0, blocks: 0,
+};
+export const idleRender: RenderStatus = {
+  running: false, phase: 'idle', progress: 0, frames: 0, seconds: 0, bytes: 0,
+  destination: '', depth: '', rate: '', track: '', trackIndex: 0, trackTotal: 0, albumLufs: -70,
+  source: idleLoudness, output: idleLoudness, error: '',
+};
+export const idleScan: FileScan = { frames: 0, seconds: 0, envelope: [], loudness: [], columns: 0, bands: 0, spectrum: [] };
 /** The structures the Rust parser accepts, for the reverb's network field. */
 export const reverbStructures = ['parallel', 'series', 'woven'] as const;
 export const reflectionTimbres = ['Studio', 'Wood', 'Glass', 'Stone', 'Hall'] as const;
