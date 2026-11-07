@@ -391,6 +391,7 @@ pub fn set_limiter(
     state: tauri::State<'_, Arc<ChainState>>,
     enabled: bool,
     threshold_db: f32,
+    ceiling_db: f32,
     release: String,
     detector: String,
     soft_clip: bool,
@@ -402,6 +403,7 @@ pub fn set_limiter(
         config.limiter = LimiterConfig {
             enabled,
             threshold_db,
+            ceiling_db,
             release,
             detector,
             soft_clip,

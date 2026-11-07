@@ -1,4 +1,4 @@
-import { AudioWaveform, Headphones, Library, Settings2, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { AudioWaveform, Headphones, Library, Settings2, SlidersHorizontal, SlidersVertical, Sparkles } from 'lucide-react';
 import { describeEq, formatGain, spatialModes } from '../model';
 import { ModeSelector } from '../components/instrument/ModeSelector';
 import { ScrollArea } from '../components/instrument/ScrollArea';
@@ -13,12 +13,13 @@ interface Props {
   track: string;
   volume: number;
   onVolume: (volume: number) => void;
-  onOpenRack: () => void;
+  /** The processor rack has its own workspace; this page links to it. */
+  onOpenProcessors: () => void;
   /** The bands are edited on their own page; this page only reports them. */
   onOpenEq: () => void;
 }
 
-export function SignalChainPage({ audio, chain, track, volume, onVolume, onOpenRack, onOpenEq }: Props) {
+export function SignalChainPage({ audio, chain, track, volume, onVolume, onOpenProcessors, onOpenEq }: Props) {
   const status = audio.status;
   const mode = spatialModes.find(item => item.id === audio.spatial.mode) ?? spatialModes[0];
   const playing = status.playing;
@@ -42,7 +43,7 @@ export function SignalChainPage({ audio, chain, track, volume, onVolume, onOpenR
     state={`${status.format} · ${playing ? 'playing' : 'idle'} · ${stages.length ? stages.join(' · ') : 'all processors bypassed'}`}
     actions={<div className="page-actions-row">
       <button className="page-button" onClick={onOpenEq}><AudioWaveform size={13} />Equaliser</button>
-      <button className="page-button" onClick={onOpenRack}><SlidersHorizontal size={13} />Processor rack</button>
+      <button className="page-button" onClick={onOpenProcessors}><SlidersVertical size={13} />Processors</button>
       <span className={`source-badge ${playing ? 'live' : ''}`}><i />{playing ? 'Playing' : 'Idle'}</span>
     </div>}
   >

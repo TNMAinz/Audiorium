@@ -54,7 +54,7 @@ configuration and the chain, all shared with the player.
 | Spatial renderer | `spatial.rs`, `spatial_out.rs` | Builds a virtual speaker layout from the stereo mix by matrix; renders it back to two channels with per-speaker level, interaural delay and head shadow. The Atmos position instead derives twelve mono feeds from that layout and hands them to Windows Spatial Sound as a 7.1.4 static bed (`spatial_out.rs`), which renders it with the format the user selected — Dolby Atmos when that is the format. Not an HRTF, not an Atmos bitstream decoder; with spatial sound off, the track uses the app's derived heights. |
 | Binaural panner | `panner.rs` | Spherical-head placement: azimuth, elevation, width, a one-pole head shadow, up to 0.7 ms ITD, four early reflections with per-material damping. |
 | Reverb | `reverb.rs` | Eight delay lines, two diffusing allpasses, seeded prime lengths, three routings (`parallel`, `series`, `woven`). A resonant network, not a convolution reverb. |
-| Limiter | `limiter.rs` | 1.5 ms look-ahead peak limiter, -0.3 dBFS ceiling, three release speeds, mid/left/right detector, optional soft clip. Sample peak, not true peak. |
+| Limiter | `limiter.rs` | 1.5 ms look-ahead peak limiter, -0.3 dBFS output held at the threshold and trimmed to level, three release speeds, both/left/right detector, optional soft clip. Sample peak, not true peak. |
 
 **Interface.** Six workspaces (Observatory, Spatial field, Analysis, Signal
 chain, Library, Devices), a contextual reference stack, a processor rack dialog,

@@ -4,8 +4,11 @@
 //! the detector signal over a 1.5 ms window decides the gain that is applied to
 //! the same audio after it has travelled through the matching delay, so a
 //! transient is already reduced when it reaches the output. Release has three
-//! speeds, and the detector can be the mid signal or either channel so that a
-//! loud left channel ducks the whole image.
+//! speeds, and the detector can be the loudest channel, which keeps both channels
+//! under the ceiling as one image, or either channel alone.
+//!
+//! The gain works from the threshold; Output is a constant trim after it, so a
+//! lower output level is quieter, not more limited.
 //!
 //! It is not a loudness normaliser: nothing here measures LUFS, and there is no
 //! programme-dependent auto-gain. It is not a true-peak limiter either, because
@@ -17,8 +20,9 @@ use std::collections::VecDeque;
 
 /// 1.5 ms at the 48 kHz rate the whole application runs at.
 pub const LOOKAHEAD: usize = 72;
-/// Output ceiling: -0.3 dBFS, the usual safety margin below full scale.
-const CEILING_DB: f32 = -0.3;
+/// The ceiling a new limiter starts on: -0.3 dBFS, the usual safety margin below
+/// full scale. The control can move it, and the stage holds whatever it is set to.
+pub const DEFAULT_CEILING_DB: f32 = -0.3;
 /// The most the applied linear gain may move in one sample, so a change never clicks.
 const GAIN_STEP: f32 = 0.02;
 const METER_DECAY: f32 = 0.999;
@@ -60,7 +64,11 @@ impl ReleaseMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Detector {
-    Mid,
+    /// The loudest channel. A detector on the mid sum reads a panned signal several
+    /// dB low, so the gain it asks for lets the louder channel overshoot the ceiling
+    /// and be clipped flat: that is the grit heard on a stereo mix.
+    #[serde(alias = "mid")]
+    Both,
     Left,
     Right,
 }
@@ -68,7 +76,7 @@ pub enum Detector {
 impl Detector {
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
-            "mid" => Self::Mid,
+            "both" | "mid" => Self::Both,
             "left" => Self::Left,
             "right" => Self::Right,
             _ => return None,
@@ -83,6 +91,10 @@ pub struct LimiterConfig {
     pub enabled: bool,
     /// Where limiting begins, in dBFS.
     pub threshold_db: f32,
+    /// The level the stage will not let anything leave above, in dBFS. With make-up
+    /// on, this is also where the limited signal leaves: the Output control is a trim
+    /// after the gain, never a second, lower threshold for the gain to chase.
+    pub ceiling_db: f32,
     pub release: ReleaseMode,
     /// Which signal decides how far to reduce.
     pub detector: Detector,
@@ -97,8 +109,9 @@ impl Default for LimiterConfig {
         Self {
             enabled: false,
             threshold_db: -3.0,
+            ceiling_db: DEFAULT_CEILING_DB,
             release: ReleaseMode::Medium,
-            detector: Detector::Mid,
+            detector: Detector::Both,
             soft_clip: false,
             auto_makeup: true,
         }
@@ -108,6 +121,9 @@ impl Default for LimiterConfig {
 pub fn validate(config: &LimiterConfig) -> Result<(), String> {
     if !config.threshold_db.is_finite() || !(-24.0..=0.0).contains(&config.threshold_db) {
         return Err("Limiter threshold must be between -24 and 0 dBFS".into());
+    }
+    if !config.ceiling_db.is_finite() || !(-24.0..=0.0).contains(&config.ceiling_db) {
+        return Err("Limiter ceiling must be between -24 and 0 dBFS".into());
     }
     Ok(())
 }
@@ -174,13 +190,15 @@ impl Limiter {
         };
         let threshold_linear = db_to_linear(threshold);
         let detector = match config.detector {
-            Detector::Mid => (frame[0] + frame[1]) * 0.5,
-            Detector::Left => frame[0],
-            Detector::Right => frame[1],
-        }
-        .abs();
+            Detector::Both => frame[0].abs().max(frame[1].abs()),
+            Detector::Left => frame[0].abs(),
+            Detector::Right => frame[1].abs(),
+        };
         self.window.push_back(detector);
-        while self.window.len() > LOOKAHEAD {
+        // One sample more than the delay, so the sample this head is about to emit is
+        // in the window that decides its gain. Without it the loudest sample of a
+        // transient is judged by its neighbours alone and leaves above the ceiling.
+        while self.window.len() > LOOKAHEAD + 1 {
             self.window.pop_front();
         }
         let peak = self
@@ -189,8 +207,18 @@ impl Limiter {
             .copied()
             .fold(0.0_f32, f32::max)
             .max(0.0);
-        let target = if peak > threshold_linear {
-            (threshold_linear / peak).clamp(0.0, 1.0)
+        let ceiling = db_to_linear(if config.ceiling_db.is_finite() {
+            config.ceiling_db.clamp(-24.0, 0.0)
+        } else {
+            DEFAULT_CEILING_DB
+        });
+        // The gain is decided by the threshold alone. Output is a trim applied after
+        // it, so pulling the output down under the programme level is one constant
+        // multiply: the waveform keeps its shape instead of being squashed peak by
+        // peak, which is what made a quiet output sound grainy.
+        let limit_to = threshold_linear;
+        let target = if peak > limit_to {
+            (limit_to / peak).clamp(0.0, 1.0)
         } else {
             1.0
         };
@@ -222,13 +250,16 @@ impl Limiter {
             [0.0; 2]
         };
 
-        let makeup = if config.auto_makeup {
-            (db_to_linear(CEILING_DB) / threshold_linear).max(1.0)
+        // Make-up brings the limited peak to the Output level. Without it the stage
+        // never adds gain: the knob can only pull the level down, and the ceiling is
+        // then a safety line above the signal.
+        let requested = ceiling / limit_to;
+        let trim = if config.auto_makeup {
+            requested
         } else {
-            1.0
+            requested.min(1.0)
         };
-        let ceiling = db_to_linear(CEILING_DB);
-        let applied = self.gain * makeup;
+        let applied = self.gain * trim;
         let mut out = [0.0f32; 2];
         for channel in 0..2 {
             let value = delayed[channel] * applied;
@@ -269,8 +300,9 @@ mod tests {
         LimiterConfig {
             enabled: true,
             threshold_db: -6.0,
+            ceiling_db: DEFAULT_CEILING_DB,
             release: ReleaseMode::Medium,
-            detector: Detector::Mid,
+            detector: Detector::Both,
             soft_clip: false,
             auto_makeup: false,
         }
@@ -467,8 +499,98 @@ mod tests {
             .map(|index| limiter.process(sine(1_000.0, 1.0, index), config))
             .collect();
         let held = peak_db(&out[out.len() - 4_000..]);
-        assert!(held <= CEILING_DB + 0.01, "ceiling passed at {held} dBFS");
-        assert!((held - CEILING_DB).abs() < 0.3, "make-up left {held} dBFS");
+        assert!(held <= DEFAULT_CEILING_DB + 0.01, "ceiling passed at {held} dBFS");
+        assert!((held - DEFAULT_CEILING_DB).abs() < 0.3, "make-up left {held} dBFS");
         assert!(limiter.reduction_db() < -3.0, "{}", limiter.reduction_db());
+    }
+
+    #[test]
+    fn the_ceiling_is_the_output_level_the_stage_holds() {
+        // The same loud sine, held at two different ceilings: the output follows the
+        // knob instead of a constant, which is what the panel's Output control is.
+        let held_at = |ceiling_db: f32| {
+            let config = LimiterConfig {
+                auto_makeup: true,
+                ceiling_db,
+                ..base()
+            };
+            let mut limiter = Limiter::new(config);
+            let out: Vec<[f32; 2]> = (0..20_000)
+                .map(|index| limiter.process(sine(1_000.0, 1.0, index), config))
+                .collect();
+            peak_db(&out[out.len() - 4_000..])
+        };
+        let quiet = held_at(-12.0);
+        let loud = held_at(-1.0);
+        assert!((quiet - -12.0).abs() < 0.3, "{quiet} dBFS at a -12 dBFS ceiling");
+        assert!((loud - -1.0).abs() < 0.3, "{loud} dBFS at a -1 dBFS ceiling");
+        assert!(loud > quiet + 8.0, "the ceiling did not move the output");
+    }
+
+    #[test]
+    fn turning_the_output_down_is_a_trim_not_more_limiting() {
+        // The complaint this guards against: turning Output down under the programme
+        // level used to make the gain chase a lower ceiling, and the squashing it did
+        // sounded grainy. Output is one constant multiply after the gain, so the
+        // limiter works exactly as hard at -12 dBFS as it does at -3, and only the
+        // level changes.
+        let held_at = |ceiling_db: f32| {
+            let config = LimiterConfig {
+                threshold_db: -3.0,
+                ceiling_db,
+                auto_makeup: true,
+                ..base()
+            };
+            let mut limiter = Limiter::new(config);
+            let out: Vec<[f32; 2]> = (0..20_000)
+                .map(|index| limiter.process(sine(1_000.0, 1.0, index), config))
+                .collect();
+            (peak_db(&out[out.len() - 4_000..]), limiter.reduction_db())
+        };
+        let (loud, loud_reduction) = held_at(-3.0);
+        let (quiet, quiet_reduction) = held_at(-12.0);
+        assert!((quiet - -12.0).abs() < 0.3, "held at {quiet} dBFS");
+        assert!((loud - -3.0).abs() < 0.3, "held at {loud} dBFS");
+        assert!(
+            (loud_reduction - quiet_reduction).abs() < 0.1,
+            "the output changed the gain: {loud_reduction} dB against {quiet_reduction} dB"
+        );
+        assert!(quiet_reduction < -2.0, "the stage did not limit: {quiet_reduction} dB");
+    }
+
+    #[test]
+    fn the_louder_channel_decides_so_neither_is_clipped_flat() {
+        // A detector on the mid sum reads a panned signal low, so the gain it asks for
+        // lets the louder channel leave above the ceiling and be clipped flat. The
+        // link detector holds both channels, which is what removes the grit.
+        let config = LimiterConfig {
+            threshold_db: -3.0,
+            ceiling_db: -3.0,
+            auto_makeup: true,
+            ..base()
+        };
+        let ceiling = db_to_linear(-3.0);
+        let mut limiter = Limiter::new(config);
+        let mut loudest = [0.0_f32; 2];
+        for index in 0..20_000 {
+            let left = sine(440.0, 1.0, index)[0];
+            let out = limiter.process([left, left * 0.4], config);
+            for channel in 0..2 {
+                loudest[channel] = loudest[channel].max(out[channel].abs());
+            }
+        }
+        for (channel, peak) in loudest.iter().enumerate() {
+            assert!(*peak <= ceiling + 1e-4, "channel {channel} left {peak} above the ceiling");
+        }
+        assert!(limiter.reduction_db() < -2.0, "{}", limiter.reduction_db());
+    }
+
+    #[test]
+    fn a_ceiling_outside_the_scale_is_rejected_rather_than_silently_moved() {
+        let config = LimiterConfig {
+            ceiling_db: -30.0,
+            ..base()
+        };
+        assert!(validate(&config).is_err());
     }
 }

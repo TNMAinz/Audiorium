@@ -142,6 +142,7 @@ export function useChain(suspended = false) {
     void send(() => invoke<ChainSettings>('set_limiter', {
       enabled: next.enabled,
       thresholdDb: next.thresholdDb,
+      ceilingDb: next.ceilingDb,
       release: next.release,
       detector: next.detector,
       softClip: next.softClip,

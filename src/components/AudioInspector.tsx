@@ -15,8 +15,8 @@ interface Props {
   onReducedMotion: () => void;
   /** Bumped by the player's Audio controls button to open the setup dialog. */
   setupRequest?: number;
-  /** Bumped by the pages that open the processor rack. */
-  onOpenRack?: () => void;
+  /** Opens the Processors workspace, where the panner, room and limiter are edited. */
+  onOpenProcessors?: () => void;
   volume: number;
   onVolume: (volume: number) => void;
   /** The loaded track, or empty when nothing is playing. */
@@ -25,7 +25,7 @@ interface Props {
   spatialPath?: string;
 }
 
-export function AudioInspector({ analysis, chain, theme, onTheme, reducedMotion, onReducedMotion, setupRequest = 0, onOpenRack = () => {}, volume, onVolume, track, spatialPath = '' }: Props) {
+export function AudioInspector({ analysis, chain, theme, onTheme, reducedMotion, onReducedMotion, setupRequest = 0, onOpenProcessors = () => {}, volume, onVolume, track, spatialPath = '' }: Props) {
   const settings = useRef<HTMLDialogElement>(null);
   const settingsButton = useRef<HTMLButtonElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -102,7 +102,7 @@ export function AudioInspector({ analysis, chain, theme, onTheme, reducedMotion,
     </section>
 
     <section className="glass-panel reverb-panel">
-      <div className="panel-heading"><h2>Reverb</h2><div className="heading-tools"><span className={`instrument-tag ${reverb.enabled ? 'live-tag' : ''}`}>{reverb.enabled ? 'IN PATH' : 'BYPASSED'}</span><button className="icon-button" aria-label="Open processors" title="Panner, reverb and limiter" onClick={onOpenRack}><SlidersHorizontal size={13} /></button></div></div>
+      <div className="panel-heading"><h2>Reverb</h2><div className="heading-tools"><span className={`instrument-tag ${reverb.enabled ? 'live-tag' : ''}`}>{reverb.enabled ? 'IN PATH' : 'BYPASSED'}</span><button className="icon-button" aria-label="Open processors" title="Processors: panner, reverb and limiter" onClick={onOpenProcessors}><SlidersHorizontal size={13} /></button></div></div>
       <dl className={`room-readout readout ${reverb.enabled ? 'engaged' : ''}`}>
         <div><dt>Network</dt><dd title={`${reverb.network} · ${reverbTime(reverb.decay)} · dry ${dryPercent}% · ${wetPercent}% wet`}>{reverb.network}</dd></div>
         <div><dt>Decay</dt><dd><span className="readout-scale" aria-hidden="true"><i style={{ width: `${decayPercent}%` }} /></span><span className="readout-number">{reverbTime(reverb.decay)}</span></dd></div>

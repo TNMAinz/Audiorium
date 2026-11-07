@@ -57,12 +57,19 @@ unchanged.
    curve drawn from the coefficients the audio path is actually running. A band
    change is crossfaded over 10 ms so it does not click, and the page reports the
    headroom the curve leaves.
-5. **Limiter.** A look-ahead peak limiter: 72 samples of look-ahead, a −0.3 dBFS
-   ceiling, fast/medium/slow release, mid/left/right detection, optional soft
-   clip and automatic make-up that normalises the limited peak to the ceiling.
-   It is not a true-peak limiter and not a loudness normaliser.
+5. **Limiter.** A look-ahead peak limiter: 72 samples of look-ahead, an output
+   level of −0.3 dBFS by default, fast/medium/slow release, both/left/right
+   detection, optional soft clip and automatic make-up that normalises the
+   limited peak to the output level. The gain works from the threshold and the
+   output is one trim after it, so turning the output down is quieter rather than
+   more limited. It is not a true-peak limiter and not a loudness normaliser.
 
-![The processor rack](screenshots/processors.png)
+The panner, the reverb and the limiter are edited on the Processors page, which
+names what each stage is holding and meters the limiter from the engine; the
+equaliser keeps a page of its own, and the Signal chain page draws all five in
+the order the audio meets them.
+
+![The Processors page, with all three stages in the path](screenshots/processors.png)
 
 ## Equaliser patches
 

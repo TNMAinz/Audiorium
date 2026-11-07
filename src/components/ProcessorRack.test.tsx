@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { ComponentProps } from 'react';
 import { describe, expect, it } from 'vitest';
 import { ProcessorRack } from './ProcessorRack';
+import { ProcessorsPage } from '../pages/ProcessorsPage';
 import { defaultChain, emptyPresets, idleEqResponse, idleMeters } from '../model';
 
 type Chain = ComponentProps<typeof ProcessorRack>['chain'];
@@ -14,7 +15,7 @@ const chain: Chain = {
   resetEq: () => {}, matchHeadroom: () => {},
   applyPreset: () => {}, renamePreset: async () => true, deletePreset: () => {},
 };
-const render = (settings: Chain) => renderToStaticMarkup(<ProcessorRack chain={settings} open={0} />);
+const render = (settings: Chain) => renderToStaticMarkup(<ProcessorsPage chain={settings} onOpenEq={() => {}} />);
 
 describe('processor rack', () => {
   it('is built from instruments, not a form of sliders', () => {
@@ -44,6 +45,9 @@ describe('processor rack', () => {
     expect(markup).toContain('aria-label="Threshold"');
     expect(markup).toContain('aria-valuemin="-24"');
     expect(markup).toContain('aria-valuemax="0"');
+    // The output level is a control of its own, not a fixed constant in the engine.
+    expect(markup).toContain('aria-label="Output"');
+    expect(markup).toContain('aria-valuetext="−0.3 dBFS"');
     // Dry and wet are two gains with their own scales, not one balance.
     expect(markup).toContain('aria-label="Dry"');
     expect(markup).toContain('aria-label="Wet"');
@@ -136,6 +140,18 @@ describe('processor rack', () => {
       meters: { ...idleMeters, reverbEnabled: true, wetMix: 0.42 },
     };
     expect(render(roomOnly)).toContain('1 of 3 in path · Reverb · Binaural panner and Limiter bypassed');
+  });
+
+  it('reports the output level it is holding, not a constant', () => {
+    const quieter: Chain = {
+      ...chain,
+      chain: { ...defaultChain, limiter: { ...defaultChain.limiter, enabled: true, ceilingDb: -12 } },
+      meters: { ...idleMeters, limiterEnabled: true, outputPeakDb: -12, gainReductionDb: -4 },
+    };
+    const markup = render(quieter);
+    expect(markup).toContain('−12.0 dBFS');
+    // The ladder marks the same ceiling the limiter is holding.
+    expect(markup).toContain('ceiling <b class="mono">−12.0</b>');
   });
 
   it('shows the engine figures the knobs stand for', () => {

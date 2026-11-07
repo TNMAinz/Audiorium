@@ -183,10 +183,15 @@ transposed, so a gain change cannot make the filter numerically unstable.
 ### 3.6 Limiter (`limiter.rs`)
 
 72-sample (1.5 ms) look-ahead: the peak of the detector signal over the window
-decides the gain applied to the same audio after its matching delay. Ceiling
--0.3 dBFS, three release speeds, mid/left/right detector, optional soft clip and
-auto make-up. Sample peak only; nothing is oversampled, so inter-sample peaks are
-not measured and "true peak" is never claimed.
+decides the gain applied to the same audio after its matching delay. Output -0.3
+dBFS by default, three release speeds, both/left/right detector, optional soft clip
+and auto make-up. The gain always holds peaks at the threshold and Output is one
+constant trim after it, so pulling the output down keeps the waveform's shape
+instead of forcing the gain to chase a second, lower ceiling. The detector is the
+loudest channel, not the mid sum: a mid detector reads a panned signal several dB
+low and the gain it asks for leaves the louder channel to be clipped flat at the
+ceiling, which is heard as grit. Sample peak only; nothing is oversampled, so
+inter-sample peaks are not measured and "true peak" is never claimed.
 
 ### 3.7 What is stored (`store.rs`, `presets.rs`)
 

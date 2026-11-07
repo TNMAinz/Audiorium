@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, AudioWaveform, Boxes, Disc3, Headphones, Home, SlidersHorizontal } from 'lucide-react';
+import { Activity, AudioWaveform, Boxes, Disc3, Headphones, Home, SlidersHorizontal, SlidersVertical } from 'lucide-react';
 import { AlbumGlobe } from './components/AlbumGlobe';
 import { AudioInspector } from './components/AudioInspector';
 import { PlayerBar } from './components/PlayerBar';
-import { ProcessorRack } from './components/ProcessorRack';
 import { WindowChrome } from './components/WindowChrome';
 import { type Theme, type Workspace } from './model';
 import { useAnalysis } from './useAnalysis';
@@ -16,6 +15,7 @@ import { localThemeStorage, readTheme, writeTheme } from './themeMemory';
 import { SpatialFieldPage } from './pages/SpatialFieldPage';
 import { AnalysisPage } from './pages/AnalysisPage';
 import { SignalChainPage } from './pages/SignalChainPage';
+import { ProcessorsPage } from './pages/ProcessorsPage';
 import { EqualiserPage } from './pages/EqualiserPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { LibraryPage } from './pages/LibraryPage';
@@ -25,6 +25,7 @@ const nav: { name: Workspace; label: string; icon: typeof Home; group: 'Explore'
   { name: 'Spatial', label: 'Spatial field', icon: Boxes, group: 'Explore' },
   { name: 'Spectrum', label: 'Analysis', icon: Activity, group: 'Explore' },
   { name: 'Flow', label: 'Signal chain', icon: SlidersHorizontal, group: 'Explore' },
+  { name: 'Processors', label: 'Processors', icon: SlidersVertical, group: 'Explore' },
   { name: 'Eq', label: 'Equaliser', icon: AudioWaveform, group: 'Explore' },
   { name: 'Library', label: 'Library', icon: Disc3, group: 'System' },
   { name: 'Devices', label: 'Devices', icon: Headphones, group: 'System' },
@@ -37,7 +38,6 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(() => readTheme(localThemeStorage()));
   useEffect(() => { writeTheme(localThemeStorage(), theme); }, [theme]);
   const [setupRequest, setSetupRequest] = useState(0);
-  const [rackRequest, setRackRequest] = useState(0);
   // Quiet by default: the scene holds still until motion is asked for in settings, and the answer is remembered.
   const [reduceMotion, setReduceMotion] = useState(() => readReducedMotion(localMotionStorage()));
   useEffect(() => { writeReducedMotion(localMotionStorage(), reduceMotion); }, [reduceMotion]);
@@ -77,14 +77,14 @@ export function App() {
       </section> : <div className="workspace-host">
         {workspace === 'Spatial' && <SpatialFieldPage audio={analysis} layout={layout} spatialPath={player.status.spatial} />}
         {workspace === 'Spectrum' && <AnalysisPage audio={analysis} history={analysis.history} />}
-        {workspace === 'Flow' && <SignalChainPage audio={analysis} chain={chain} track={player.status.active ? player.status.title : ''} volume={player.status.volume} onVolume={volume => void player.setVolume(volume)} onOpenRack={() => setRackRequest(count => count + 1)} onOpenEq={() => setWorkspace('Eq')} />}
+        {workspace === 'Flow' && <SignalChainPage audio={analysis} chain={chain} track={player.status.active ? player.status.title : ''} volume={player.status.volume} onVolume={volume => void player.setVolume(volume)} onOpenProcessors={() => setWorkspace('Processors')} onOpenEq={() => setWorkspace('Eq')} />}
+        {workspace === 'Processors' && <ProcessorsPage chain={chain} onOpenEq={() => setWorkspace('Eq')} />}
         {workspace === 'Eq' && <EqualiserPage chain={chain} />}
         {workspace === 'Library' && <LibraryPage library={library} player={player} />}
         {workspace === 'Devices' && <DevicesPage audio={analysis} error={player.error} />}
       </div>}
     </main>
-    <AudioInspector analysis={analysis} chain={chain} theme={theme} onTheme={setTheme} reducedMotion={reduceMotion} onReducedMotion={() => setReduceMotion(!reduceMotion)} setupRequest={setupRequest} onOpenRack={() => setRackRequest(count => count + 1)} volume={player.status.volume} onVolume={volume => void player.setVolume(volume)} track={player.status.active ? player.status.title : ''} spatialPath={player.status.spatial} />
-    <ProcessorRack chain={chain} open={rackRequest} />
+    <AudioInspector analysis={analysis} chain={chain} theme={theme} onTheme={setTheme} reducedMotion={reduceMotion} onReducedMotion={() => setReduceMotion(!reduceMotion)} setupRequest={setupRequest} onOpenProcessors={() => setWorkspace('Processors')} volume={player.status.volume} onVolume={volume => void player.setVolume(volume)} track={player.status.active ? player.status.title : ''} spatialPath={player.status.spatial} />
     <PlayerBar playback={player.status} cover={deckArtwork.covers.get(player.status.path)} hasQueue={player.hasQueue} busy={player.busy} shuffle={player.shuffle} repeat={player.repeat} onToggle={() => void player.toggle()} onNext={() => void player.next()} onPrevious={() => void player.previous()} onShuffle={player.toggleShuffle} onRepeat={player.cycleRepeat} onSeek={seconds => void player.seek(seconds)} onStop={() => void player.stop()} onControls={() => setSetupRequest(count => count + 1)} />
   </div>;
 }

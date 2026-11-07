@@ -1145,58 +1145,80 @@ select:disabled { opacity: .55; }
 }
 
 
-/* ---------- processor rack ---------- */
-/* The rack is a signal path, not a card deck: three numbered stage strips in the
-   order the audio passes through them, on one grid, with the engine's own figures
-   in a fixed readout column beside each stage. */
-.processor-rack { width: min(1000px, calc(100vw - 32px)); padding: 16px; max-height: calc(100dvh - 24px); }
-.processor-rack:focus { outline: none; }
-.rack-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
-.rack-title { min-width: 0; }
-.processor-rack h2 { margin: 0; font-size: var(--fs-title); font-weight: 500; letter-spacing: -.01em; color: #e9eef6; }
-.rack-state { display: block; margin: 4px 0 0; font-size: var(--fs-micro); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rack-tools { display: flex; align-items: center; gap: 10px; flex: none; }
-.rack-rate { font-size: var(--fs-micro); color: var(--dim); font-variant-numeric: tabular-nums; }
+/* ---------- processors page ---------- */
+/* The rack is a signal path, not a card deck: three numbered stages in the order
+   the audio passes through them, each one a plate, its controls and the engine's
+   own figures in a readout plate, with the meter bridge closing the path. */
+.processors-grid { grid-template-columns: minmax(0, 1fr); align-content: start; }
+.rack-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rack-body > .audio-warning, .rack-body > .audio-error { margin: 0; }
 
-.rack-stages { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
-.stage { display: grid; grid-template-columns: 168px minmax(0, 1fr) 216px; grid-template-areas: "plate controls readout" "note note note"; gap: 10px 16px; padding: 10px 12px; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(180deg, #12161b, #0f1216); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035); }
+.rack-stages { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.stage, .meter-bridge { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 13px 15px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); }
 /* A lit edge marks a stage that is in the path; it is drawn inside the box so
    switching a stage on cannot move any text by a pixel. */
-.stage.in-path { box-shadow: inset 2px 0 0 var(--accent), inset 0 1px 0 rgba(255, 255, 255, .035); }
-.stage-plate { grid-area: plate; display: flex; flex-direction: column; gap: 7px; min-width: 0; padding-right: 14px; border-right: 1px solid var(--hairline-soft); }
-.stage-index { font-size: var(--fs-micro); color: var(--dim); font-variant-numeric: tabular-nums; letter-spacing: .08em; }
+.stage.in-path { box-shadow: inset 2px 0 0 var(--accent), inset 0 1px 0 rgba(255, 255, 255, .04); }
+/* One plate line per stage, so the three strips read as the same instrument. */
+.stage-head { display: flex; align-items: center; gap: 10px; min-width: 0; padding-bottom: 8px; border-bottom: 1px solid var(--hairline-soft); }
+.stage-index { flex: none; min-width: 32px; font-size: var(--fs-micro); color: var(--dim); font-variant-numeric: tabular-nums; letter-spacing: .08em; }
 .stage.in-path .stage-index { color: var(--accent); }
-.stage-name { min-width: 0; }
-.stage-name h3 { margin: 0; font-size: var(--fs-sm); font-weight: 500; color: #e9eef6; }
-.stage-model { display: block; margin-top: 2px; font-size: var(--fs-micro); color: var(--dim); }
-.stage-power { margin-top: auto; display: inline-flex; align-items: center; gap: 7px; align-self: flex-start; padding: 4px 9px 4px 7px; border: 1px solid var(--line); border-radius: 2px; background: var(--inset); color: var(--muted); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+.stage-name { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.stage-name h3 { flex: none; margin: 0; font-size: var(--fs-sm); font-weight: 500; color: #e9eef6; }
+.stage-model { min-width: 0; font-size: var(--fs-micro); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-power { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 7px; padding: 4px 9px 4px 7px; border: 1px solid var(--line); border-radius: 2px; background: var(--inset); color: var(--muted); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
 .stage-power i { width: 6px; height: 6px; border-radius: 50%; background: #39414f; }
 .stage-power:hover { border-color: #2c3644; color: #cfdcf2; }
 .stage-power.on { color: #dff6ea; border-color: #2d4a40; }
 .stage-power.on i { background: #7ef0c0; box-shadow: 0 0 6px rgba(126, 240, 192, .7); }
 
-/* Each stage owns its own grid, so its controls line up with the strip above and
+/* Every stage reads the same way at every width: the controls take the width and
+   the engine's figures run as one band under them, so the three stages stay the
+   same shape instead of one being squeezed into a side column. */
+.stage-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* Each stage owns its own grid, so its controls line up with the stage above and
    below it instead of reflowing with whatever text they happen to carry. */
-.stage-controls { grid-area: controls; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 16px; min-width: 0; }
+.stage-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 16px; min-width: 0; }
 .stage-controls.panner { display: grid; grid-template-columns: 172px minmax(0, 1fr); grid-template-areas: "pad knobs" "footer footer"; align-items: start; gap: 8px 16px; }
-.stage-controls.room { display: grid; grid-template-columns: auto auto; align-items: start; gap: 10px 14px; }
+.stage-controls.room { display: grid; grid-template-columns: minmax(0, auto) minmax(216px, 1fr); align-items: start; gap: 10px 18px; }
+.stage-controls.room .routing-field { min-width: 0; }
 /* Decay, Dry and Wet are one row of one strip, the way a channel strip reads. */
-.stage-controls.room .stage-knobs { grid-template-columns: repeat(3, minmax(72px, auto)); }
-.routing-field { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 8px; min-width: 0; }
-.room-roll { flex: none; align-items: center; padding: 3px 6px; gap: 4px; font-size: var(--fs-micro); white-space: nowrap; }
-.stage-controls.limiter { display: grid; grid-template-columns: 76px auto auto minmax(0, 1fr); align-items: start; gap: 10px 16px; }
+.stage-controls.room .stage-knobs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* The diagrams and the roll are one block: on a narrow stage the roll moves under
+   the diagrams rather than squeezing the three gains out of the row. */
+.routing-field { display: flex; flex-wrap: wrap; align-items: flex-start; align-content: flex-start; gap: 6px 8px; min-width: 0; }
+.room-roll { flex: none; margin-left: auto; align-items: center; padding: 3px 6px; gap: 4px; font-size: var(--fs-micro); white-space: nowrap; }
+/* Four groups on a grid of equal cells: the dial pair, the two banks and the options.
+   Two cells a row keeps every group centred and paired; a wide page gives each one
+   its own column, so the strip fills its width instead of bunching at the left. */
+.stage-controls.limiter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-items: center; align-items: start; gap: 12px 18px; }
+@media (min-width: 1200px) {
+  .stage-controls.limiter { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+/* The two dials carry the longest label pair on the page, so their columns keep a
+   clear gap: at the shared 6 px the words nearly touch. The tracks are fractions of
+   the cell, not auto: an auto track would widen with the value text, and the dial
+   would slide sideways while it is being turned. */
+.stage-controls.limiter .stage-knobs { justify-self: center; width: min(100%, 176px); grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; }
+/* The two options read as one labelled group, like a bank: label over switches. */
+.limiter-flags { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.limiter-options { display: flex; flex-wrap: wrap; gap: 6px 10px; }
 .pad-cell { grid-area: pad; min-width: 0; }
 .panner-right { grid-area: knobs; min-width: 0; }
 .panner-footer { grid-area: footer; display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* The dials start level with the banks beside them, so the limiter reads as one row
+   of controls rather than two knobs floating above a label line.
+   .rack-label is 14 px and the field's own gap is 4. */
+.limiter-flags .rack-label, .seg-field .rack-label { display: block; }
+.stage-controls.limiter .stage-knobs { margin-top: 18px; }
 .panner-footer > .toggle-line { margin-left: auto; }
 /* A material that cannot be heard yet still takes its setting, but it must not look like
    a control that is doing something: the bank dims and the note names the missing switch. */
 .panner-footer.inactive .segmented { opacity: .5; }
 .panner-footer.inactive .rack-label { color: #5f6a7a; }
-.limiter-flags { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
 .stage-knobs { display: grid; grid-template-columns: repeat(2, minmax(76px, auto)); justify-content: start; align-content: start; gap: 8px 6px; }
-/* The panner has four equal parameters, so they read as one row of a channel strip. */
-.stage-controls.panner .stage-knobs { grid-template-columns: repeat(4, minmax(72px, auto)); }
+/* The panner has four equal parameters, so they read as one row of a channel strip,
+   spread across the width the stage is given rather than bunched at its left edge. */
+.stage-controls.panner .stage-knobs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .stage-knobs.single { grid-template-columns: auto; }
 .seg-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .rack-label { font-size: var(--fs-micro); color: var(--dim); white-space: nowrap; }
@@ -1204,16 +1226,20 @@ select:disabled { opacity: .55; }
 .stage-controls.room .routing-option svg { width: 46px; height: 25px; }
 
 
-.stage-readout { grid-area: readout; display: flex; flex-direction: column; gap: 9px; min-width: 0; padding-left: 14px; border-left: 1px solid var(--hairline-soft); }
-.spec-list { display: flex; flex-direction: column; gap: 4px; margin: 0; }
-.spec-list > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-bottom: 3px; border-bottom: 1px solid var(--hairline-soft); }
+/* The figures sit in a recessed plate of their own: it reads as the engine's
+   display, and the taps sit at its right end where the panner's strip belongs. */
+.stage-readout { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 22px; min-width: 0; padding: 8px 11px; border: 1px solid var(--hairline-soft); border-radius: 2px; background: var(--inset); }
+.spec-list { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0; }
+.spec-list > div { display: flex; align-items: baseline; gap: 8px; }
 .spec-list dt { flex: none; font-size: var(--fs-micro); color: var(--dim); white-space: nowrap; }
-.spec-list dd { flex: 1 1 auto; min-width: 0; margin: 0; font-size: var(--fs-micro); color: #cfdcf2; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stage-note { grid-area: note; margin: 0; font-size: var(--fs-micro); line-height: 1.45; color: var(--dim); }
+.spec-list dd { flex: none; min-width: 0; margin: 0; font-size: var(--fs-micro); color: #cfdcf2; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* In the figures band the strip is the picture, not a paragraph: its caption is the
+   stage note under it, so the band keeps one line. */
+.stage-readout .tap-strip { flex: 0 0 190px; max-width: 190px; margin-left: auto; }
+.stage-readout .tap-strip .panel-note { display: none; }
+.stage-note { margin: 0; font-size: var(--fs-micro); line-height: 1.45; color: var(--dim); }
 
-.meter-bridge { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 16px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(180deg, #12161b, #0f1216); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035); }
-.bridge-plate { display: flex; flex-direction: column; gap: 7px; min-width: 0; padding-right: 14px; border-right: 1px solid var(--hairline-soft); }
-.bridge-meters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; min-width: 0; }
+.bridge-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px; min-width: 0; }
 .bridge-meter { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .knob { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 62px; }
 .knob-dial { border-radius: 50%; cursor: ns-resize; outline: none; touch-action: none; }
@@ -1226,7 +1252,7 @@ select:disabled { opacity: .55; }
 .knob-pointer { stroke: #dfe8ff; stroke-width: 2; stroke-linecap: round; }
 .knob-cap { fill: rgba(10, 16, 28, .92); stroke: rgb(var(--rim-rgb) / .18); }
 .knob-label { font-size: var(--fs-micro); letter-spacing: .01em; color: var(--muted); text-align: center; }
-.knob-readout { font-size: var(--fs-micro); color: #cfdcf2; }
+.knob-readout { font-size: var(--fs-micro); color: #cfdcf2; white-space: nowrap; }
 .knob.dragging .knob-pointer { stroke: var(--accent); }
 .knob.disabled { opacity: .45; }
 .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 6px; border: 1px solid var(--hairline); background: var(--inset); }
@@ -1311,39 +1337,28 @@ select:disabled { opacity: .55; }
 .segmented button.selected { background: var(--panel-raised); box-shadow: inset 0 -1px 0 var(--accent); }
 .routing-option { border-radius: 2px; background: var(--inset); border-color: var(--line); }
 .routing-option.selected { border-color: color-mix(in srgb, var(--accent) 30%, #2b3646); background: var(--panel-raised); }
-.processor-rack { background: var(--inset); }
-.rack-footer { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--hairline); font-size: var(--fs-micro); color: var(--muted); }
+.rack-footer { display: flex; align-items: center; gap: 10px; padding-top: 8px; border-top: 1px solid var(--hairline-soft); font-size: var(--fs-micro); color: var(--muted); }
 .rack-footer-note { margin-left: auto; color: var(--dim); }
-/* Below this the readout column is what a stage cannot keep: it moves under the
-   controls as one row of figures, instead of squeezing the knobs into a sliver. */
+/* A narrow window keeps the figures and drops the sentence under the meters rather
+   than wrapping it under the report. */
 @media (max-width: 980px) {
-  .stage { grid-template-columns: minmax(0, 1fr); grid-template-areas: "plate" "controls" "readout" "note"; gap: 9px; }
-  .stage-plate, .bridge-plate { flex-direction: row; align-items: center; gap: 10px; padding: 0 0 8px; border-right: none; border-bottom: 1px solid var(--hairline-soft); }
-  .stage-power { margin-top: 0; margin-left: auto; }
-  .stage-readout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; align-items: start; padding: 9px 0 0; border-left: none; border-top: 1px solid var(--hairline-soft); }
-  .spec-list { flex-direction: row; flex-wrap: wrap; gap: 6px 22px; }
-  .spec-list > div { gap: 8px; padding-bottom: 0; border-bottom: none; }
-  .spec-list dd { flex: none; text-align: left; }
-  .stage-readout .tap-strip { max-width: 320px; }
-  .meter-bridge { grid-template-columns: minmax(0, 1fr); }
   .rack-footer-note { display: none; }
 }
 @media (max-width: 560px) {
   .bridge-meters { grid-template-columns: minmax(0, 1fr); }
-  .rack-rate { display: none; }
+  .stage-name { flex-wrap: wrap; gap: 1px 9px; }
 }
 /* A short window trims the rack before it ever scrolls: the pad is the only part
-   that can give, and the strips lose their slack, not their controls. */
+   that can give, and the stages lose their slack, not their controls. */
 @media (max-height: 800px) {
-  .processor-rack { padding: 12px; }
-  .rack-stages { gap: 6px; margin-top: 8px; }
-  .stage { padding: 8px 10px; gap: 8px 12px; }
+  .rack-stages { gap: 8px; }
+  .stage, .meter-bridge { padding: 11px 13px; gap: 8px; }
   .stage-controls.panner { grid-template-columns: 150px minmax(0, 1fr); }
-  .meter-bridge { margin-top: 6px; padding: 8px 10px; }
 }
 /* A phone-width rack cannot hold the pad beside four knobs; the pad takes its own row. */
 @media (max-width: 520px) {
   .stage-controls.panner { grid-template-columns: minmax(0, 1fr); grid-template-areas: "pad" "knobs" "footer"; }
+  .stage-controls.limiter { grid-template-columns: minmax(0, 1fr); }
   .panner-footer { flex-wrap: wrap; }
   .panner-footer > .toggle-line { margin-left: 0; }
   .stage-knobs, .stage-controls.panner .stage-knobs { grid-template-columns: repeat(2, minmax(76px, 1fr)); }

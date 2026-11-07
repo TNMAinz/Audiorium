@@ -24,13 +24,14 @@ export function formatGain(gain: number) {
   return `${Math.round(gain * 100)} % · ${Number.isFinite(db) ? `${db > 0 ? '+' : '−'}${Math.abs(db).toFixed(1)} dB` : '−∞ dB'}`;
 }
 
-export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Eq' | 'Spatial' | 'Library' | 'Devices';
+export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Processors' | 'Eq' | 'Spatial' | 'Library' | 'Devices';
 export type Theme = 'Ion' | 'Violet' | 'Ember';
 
 export const workspaces: Record<Workspace, { label: string; title: string; description: string }> = {
   Orbit: { label: 'Observatory', title: 'Observatory', description: 'The scene, driven by what you are playing.' },
   Spectrum: { label: 'Analysis', title: 'Analysis', description: 'Levels and spectrum of what leaves the app.' },
   Flow: { label: 'Signal chain', title: 'Signal chain', description: 'Every stage between the decoded file and the output.' },
+  Processors: { label: 'Processors', title: 'Processors', description: 'The panner, the room and the limiter, in the order the audio reaches them.' },
   Eq: { label: 'Equaliser', title: 'Equaliser', description: 'The parametric bands the audio path is running.' },
   Spatial: { label: 'Spatial field', title: 'Spatial field', description: 'The virtual speakers the renderer is using.' },
   Library: { label: 'Library', title: 'Library', description: 'Local files, decoded in the app.' },
@@ -66,7 +67,7 @@ export interface PlaybackStatus {
 }
 
 export type LimiterRelease = 'fast' | 'medium' | 'slow';
-export type LimiterDetector = 'mid' | 'left' | 'right';
+export type LimiterDetector = 'both' | 'left' | 'right';
 
 /** Mirror of the Rust `PannerConfig`: a spherical-head binaural position, not an HRTF. */
 export interface PannerSettings {
@@ -76,7 +77,11 @@ export interface PannerSettings {
 /** Dry and wet are separate gains, not a crossfade: the room never takes the dry signal away. */
 export interface ReverbSettings { enabled: boolean; decay: number; dry: number; wet: number; network: string }
 export interface LimiterSettings {
-  enabled: boolean; thresholdDb: number; release: LimiterRelease; detector: LimiterDetector;
+  enabled: boolean; thresholdDb: number;
+  /** The level the stage holds. Make-up trims the limited signal to it; turning it
+   * down attenuates rather than making the gain work harder. */
+  ceilingDb: number;
+  release: LimiterRelease; detector: LimiterDetector;
   softClip: boolean; autoMakeup: boolean;
 }
 /** The six biquads the Rust engine implements, and nothing it does not. */
@@ -163,7 +168,7 @@ export const defaultChain: ChainSettings = {
   panner: { enabled: false, azimuth: 0, elevation: 0, width: 0.25, room: false, reflectionLength: 0.35, reflectionLevel: 0.2, timbre: 0, focus: 0.5 },
   reverb: { enabled: false, decay: 0.55, dry: 1, wet: 0.3, network: 'woven:4211' },
   eq: defaultEq,
-  limiter: { enabled: false, thresholdDb: -3, release: 'medium', detector: 'mid', softClip: false, autoMakeup: true },
+  limiter: { enabled: false, thresholdDb: -3, ceilingDb: -0.3, release: 'medium', detector: 'both', softClip: false, autoMakeup: true },
 };
 export const idleMeters: ChainMeters = {
   gainReductionDb: 0, outputPeakDb: -120, wetMix: 0,
@@ -176,7 +181,7 @@ export const limiterReleases: { id: LimiterRelease; label: string }[] = [
   { id: 'fast', label: 'Fast' }, { id: 'medium', label: 'Medium' }, { id: 'slow', label: 'Slow' },
 ];
 export const limiterDetectors: { id: LimiterDetector; label: string }[] = [
-  { id: 'mid', label: 'Mid' }, { id: 'left', label: 'Left' }, { id: 'right', label: 'Right' },
+  { id: 'both', label: 'Both' }, { id: 'left', label: 'Left' }, { id: 'right', label: 'Right' },
 ];
 
 export interface Speaker { azimuth: number; elevation: number; gain: number; source: string }

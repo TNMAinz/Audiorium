@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { SpatialFieldPage } from './SpatialFieldPage';
 import { AnalysisPage } from './AnalysisPage';
 import { SignalChainPage } from './SignalChainPage';
+import { ProcessorsPage } from './ProcessorsPage';
 import { EqualiserPage } from './EqualiserPage';
 import { DevicesPage } from './DevicesPage';
 import { LibraryPage } from './LibraryPage';
@@ -207,7 +208,7 @@ describe('analysis workspace', () => {
 describe('signal chain workspace', () => {
   it('names every stage with the values in use', () => {
     const live = { ...audio, status: { ...status, playing: true }, outputName: '1 - HDMI' };
-    const markup = renderToStaticMarkup(<SignalChainPage audio={live} chain={chain} track="Says" volume={0.4} onVolume={() => {}} onOpenRack={() => {}} onOpenEq={() => {}} />);
+    const markup = renderToStaticMarkup(<SignalChainPage audio={live} chain={chain} track="Says" volume={0.4} onVolume={() => {}} onOpenProcessors={() => {}} onOpenEq={() => {}} />);
     // The source is the decoded file, and the output is the device playback renders to.
     expect(markup).toContain('Says');
     expect(markup).toContain('1 - HDMI');
@@ -216,7 +217,8 @@ describe('signal chain workspace', () => {
     expect(markup).toContain('40 % · −8.0 dB');
     expect(markup).toContain('Spatial renderer');
     expect(markup).toContain('All bypassed');
-    expect(markup).toContain('Processor rack');
+    // The processors have a workspace of their own, so the page links to it.
+    expect(markup).toContain('>Processors</button>');
     expect(markup).toContain('the Windows mix is never tapped. Capture, when it runs, reads one chosen input.');
   });
   it('names the processors that are actually in the path', () => {
@@ -229,7 +231,7 @@ describe('signal chain workspace', () => {
         limiter: { ...defaultChain.limiter, enabled: true, thresholdDb: -6 },
       },
     };
-    const markup = renderToStaticMarkup(<SignalChainPage audio={audio} chain={active} track="" volume={0.7} onVolume={() => {}} onOpenRack={() => {}} onOpenEq={() => {}} />);
+    const markup = renderToStaticMarkup(<SignalChainPage audio={audio} chain={active} track="" volume={0.7} onVolume={() => {}} onOpenProcessors={() => {}} onOpenEq={() => {}} />);
     expect(markup).toContain('Panner 45° / 20°');
     expect(markup).toContain('Reverb 40% wet');
     expect(markup).toContain('Limiter -6.0 dB');
@@ -243,13 +245,33 @@ describe('signal chain workspace', () => {
       ...chain,
       chain: { ...defaultChain, eq: { enabled: true, preampDb: -4.5, filters: bands } },
     };
-    const markup = renderToStaticMarkup(<SignalChainPage audio={audio} chain={active} track="" volume={0.7} onVolume={() => {}} onOpenRack={() => {}} onOpenEq={() => {}} />);
+    const markup = renderToStaticMarkup(<SignalChainPage audio={audio} chain={active} track="" volume={0.7} onVolume={() => {}} onOpenProcessors={() => {}} onOpenEq={() => {}} />);
     expect(markup).toContain('Equaliser · 1 band');
     expect(markup).toContain('1 band · preamp −4.5 dB');
     expect(markup).toContain('1 active');
     // The page reports the stage and hands the bands to their own workspace.
     expect(markup).toContain('>Equaliser</button>');
     expect(markup).not.toContain('class="eq-card');
+  });
+});
+
+describe('processors workspace', () => {
+  it('is a page of the path, with the three stages and the meter bridge on it', () => {
+    const markup = renderToStaticMarkup(<ProcessorsPage chain={chain} onOpenEq={() => {}} />);
+    expect(markup).toContain('aria-labelledby="workspace-title"');
+    expect(markup).toContain('>Processors<');
+    expect(markup).toContain('All three bypassed · bit-exact pass-through');
+    expect(markup).toContain('48 kHz · stereo');
+    expect(markup).toContain('>01<');
+    expect(markup).toContain('>02<');
+    expect(markup).toContain('>03<');
+    expect(markup).toContain('Meter bridge');
+  });
+  it('is a workspace, not a dialog, and hands the equaliser to its own page', () => {
+    const markup = renderToStaticMarkup(<ProcessorsPage chain={chain} onOpenEq={() => {}} />);
+    expect(markup).toContain('class="page-grid processors-grid"');
+    expect(markup).toContain('>Equaliser</button>');
+    expect(markup).not.toContain('<dialog');
   });
 });
 
