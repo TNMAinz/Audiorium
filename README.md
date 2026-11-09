@@ -1,6 +1,7 @@
 # Audiorium
 
-A music player for Windows that shows you what it is doing to the sound.
+A music player and a software instrument for Windows, both of which show you what
+they are doing to the sound.
 
 Audiorium decodes the files on your disk and plays them through a spatial renderer
 and a rack of six processors — a binaural panner, a reverb, a 24-band parametric
@@ -9,13 +10,14 @@ and can change while the music plays. Its meters and its spectrum are computed f
 real audio — the frames it hands to the sound card, or a source you point it at — so
 a change to the chain shows up in what you see as well as in what you hear.
 
-The same rack runs over a whole file offline on the Master page: it measures the
-loudness before and after, checks the result against a delivery target, and writes a
-WAV or FLAC.
+The same rack is the effects section of a sixteen-voice wavetable instrument on the
+Synth page, and it runs over a whole file offline on the Master page: there it
+measures the loudness before and after, checks the result against a delivery target,
+and writes a WAV or FLAC.
 
 It runs on one machine and reads one folder. There is no account, no telemetry and
 no network code anywhere in the app. The only files it writes are its own settings,
-a log, and the masters you ask it to render.
+a log, the takes and masters you ask it to render, and the patches you save.
 
 ![The observatory, with a track playing](screenshots/observatory.png)
 
@@ -24,9 +26,9 @@ a log, and the masters you ask it to render.
 The Library page walks a folder you choose, reads tags from the files, lists what
 it finds and plays the one you pick. MP3, FLAC, WAV, ALAC, AAC/M4A and Ogg Vorbis are decoded in Rust
 with Symphonia; AIFF and Opus are refused with the decoder's own message rather
-than guessed at. Each track is decoded on its own thread, resampled to the app's
-single 48 kHz stereo float stream and written to a WASAPI output in shared mode,
-with the chain processing every frame on the way.
+than guessed at. Each track is decoded on its own thread, resampled to the
+player's own 48 kHz stereo float stream and written to a WASAPI output in shared
+mode, with the chain processing every frame on the way.
 
 The transport does what it says: play, pause, resume, stop, seek, previous and
 next, with the position taken from the audio that actually reached the device,
@@ -118,6 +120,61 @@ that copy active and follows it from then on. All of it survives a restart.
 
 ![The equaliser workspace](screenshots/equaliser.png)
 
+## The instrument
+
+The Synth page is a second source with a clock of its own. It does not read a file
+and does not share the player's stream: a file is read at whatever rate the device
+asks for, while an instrument has to be paced by the device and given a note before
+the next buffer is due. Its voices go through the same rack, so the processors are
+its effects section, and a stage switched out of the path is out of the instrument
+too.
+
+- **Sixteen voices, two oscillators each.** PolyBLEP saw and square, triangle and
+  sine, a wavetable oscillator, a sub an octave down and noise, with up to eight
+  detuned copies per oscillator spread across the image. The stack is divided by
+  its own count and each copy keeps its own phase, so eight copies are wider
+  rather than eight times as loud.
+- **Wavetables, including your own.** Four ship — Basic, Formant, Bell and Vocal.
+  **Import table** decodes a file with the player's own decoder, cuts it into
+  2 048-sample cycles, analyses each cycle's first 128 harmonics and keeps the
+  result as harmonic levels, so a table plays band-limited at every pitch instead
+  of aliasing near the top of the keyboard.
+- **Filters with drive.** Low, band and high pass, notch and peak from one
+  state-variable topology, a ladder that saturates inside its own feedback at
+  twice the rate, and a comb whose cutoff is heard as a note. Each model keeps its
+  own state, so switching models mid-note cannot inherit another one's tail.
+- **Envelopes, LFOs and a matrix.** Two ADSRs, two LFOs, envelope and key tracking
+  on the filter, glide, and a modulation matrix of eleven sources — both
+  envelopes, both LFOs, velocity, key, the wheel, per-note pressure and four
+  macros — into eight destinations, with a curve on every route that keeps its
+  sign. Routes to one destination sum.
+- **Tunings.** Equal, just major, Pythagorean, meantone, 19-, 22-, 31- and 53-EDO,
+  or a Scala `.scl` file. The offset is applied to the key itself, before the
+  glide, so a scale is the key's pitch rather than an effect after it.
+- **Three ways to play it.** The page's keyboard — three octaves, where a drag
+  across the keys plays every key it crosses and two fingers can hold two notes —
+  the QWERTY row with Z and X moving it an octave, or MIDI: note on and off, pitch
+  bend, CC 1, all-notes-off, polyphonic aftertouch and channel pressure. An MPE
+  controller's member channels bend and press their own note rather than the whole
+  keyboard.
+- **A take, and a bounce.** Notes are timestamped on the audio thread and rebased
+  to the first one; a bounce renders the same engine offline over the take, runs
+  the rack over it and writes 48 kHz 32-bit float WAV into `Synth` in the library,
+  where the Library and Master pages can pick it up.
+- **The display is the output.** The scope is what the stream thread handed the
+  device, peak-held into 96 columns of a 48 ms window. A stopped instrument draws
+  the patch instead, from a port of the same oscillator and filter maths, and says
+  so.
+- **Its own output stream.** 48 kHz, 32-bit float, stereo, on the endpoint the
+  Devices page names. Choosing another one while it runs reopens the stream there,
+  and the notes being held end with the old stream because nothing is carrying
+  them any more.
+- **Patches.** Eight factory patches and your own, saved with the patch book in
+  `%APPDATA%\AUDIORIUM\synth.json`, which is a separate file from the chain's
+  settings so neither part of the app rewrites the other's.
+
+![The Synth page with a chord held](screenshots/synth.png)
+
 ## Mastering
 
 The Master page renders the rack over a whole file, offline and on its own thread
@@ -171,7 +228,8 @@ loopback of any output, which is how an application playing on its own device
 still reaches these meters — and send it to the monitors through the same chain,
 on an output you choose. Capturing the device you are monitoring into is refused
 with the reason shown. Nothing is recorded to disk and nothing from the Windows
-mix is captured wholesale.
+mix is captured wholesale. The instrument plays to the output chosen here as
+well, so one choice on this page is one output for the whole app.
 
 The optional virtual audio device that can give Audiorium its own endpoints —
 so any application could pick **Speakers (Audiorium)** as its output — is a
@@ -212,35 +270,44 @@ The Rust suite covers the parts where being wrong is not visible on screen: the
 limiter holding its ceiling, the compressor's knee and release, the saturator's
 oversampling, the panner's symmetry, the reverb's seeded reproducibility, the
 equaliser's measured response, bit-exact bypass for every stage, and a master that
-comes back sample-identical when the rack is out. The frontend suite covers the
-scene's geometry, the readings it derives from the engine, the delivery-target
-check, and the workspace components.
+comes back sample-identical when the rack is out. On the instrument it counts what
+playing a note produces — A4 at 440 Hz, an octave doubling, a bend landing where it
+should, forty note-ons never exceeding sixteen voices, the same take rendering the
+same frames twice, every tuning naming 128 finite cents — and that each filter
+model stays finite at full resonance. The frontend suite covers the scene's
+geometry, the readings it derives from the engine, the delivery-target check, the
+synthesizer's own voice maths and keyboard, and the workspace components.
 
 ## Where your data goes
 
 | Path | What is there |
 | --- | --- |
-| `%APPDATA%\AUDIORIUM\state.json` | the chain settings, the rack order and every saved patch |
+| `%APPDATA%\AUDIORIUM\state.json` | the chain settings, the rack order and every saved equaliser patch |
+| `%APPDATA%\AUDIORIUM\synth.json` | the instrument's patch, its active preset and the patches you saved |
+| `%APPDATA%\AUDIORIUM\tables.json` | imported wavetables, as harmonic levels |
 | `%APPDATA%\AUDIORIUM\window.json` | where the window was left |
 | `%APPDATA%\AUDIORIUM\audiorium.log` | the launch line and any panic, capped at 256 KB |
 
 The library folder, the chosen devices, the playback level, the spatial settings,
 the theme and the reduced-motion preference live in the WebView's own local
 storage. Deleting
-`%APPDATA%\AUDIORIUM` clears the chain and every saved patch. `AUDIORIUM_CONFIG_DIR`
+`%APPDATA%\AUDIORIUM` clears the chain and every saved patch, the instrument's
+patches and imported tables. `AUDIORIUM_CONFIG_DIR`
 and `AUDIORIUM_LOG_PATH` move the folder and the log, which is how the tests keep
 their own.
 
 A master is written next to the music rather than in that folder: `Mastered` at the
-library root, or beside a file that was never in the library.
+library root, or beside a file that was never in the library. A bounced take goes
+to `Synth` in the library, where the scan picks it up as a track.
 
 ## Layout
 
 ```
 src/                          React frontend: workspaces, instruments, scene
 src-tauri/src/                Rust: decoder, spatial renderer, six processors,
-                              analysis, programme loudness, offline render and
-                              export, capture, devices, library, settings
+                              synth engine and MIDI, analysis, programme
+                              loudness, offline render and export, capture,
+                              devices, library, settings
 src-tauri/assets/corrections/ published headphone profiles and their sources
 tools/                        the scripts that fitted the two LAN 2 profiles
 docs/                         audio architecture, dependency and license record,
@@ -262,6 +329,10 @@ docs/                         audio architecture, dependency and license record,
   not an amplifier model, and nothing here is a true-peak limiter: the limiter
   holds sample peaks, so a master's true peak can sit above what it held, which is
   exactly what the Master page measures.
+- The instrument has no sequencer, no arpeggiator, no plugin hosting and no
+  multisampling, and there is no editor for a wavetable's frames or a spectral
+  warp. Its MIDI path is covered by message tests and has not been played on a
+  controller here, so MPE has not been tried against hardware.
 - A delivery target is a check, not a normaliser. Nothing applies loudness
   normalisation or a limiter for you on the way out.
 - The Atmos mode needs spatial sound enabled for the selected output in Windows.

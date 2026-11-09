@@ -643,6 +643,85 @@ fn folder_dialog() -> Result<windows::Win32::UI::Shell::IFileOpenDialog, String>
     }
 }
 
+/// Windows' own file picker, for the one file a panel asks the user to bring: a
+/// wavetable, or a Scala tuning. The title says what is being chosen, and the
+/// filter is the type the reader can actually parse, so a wrong file is not offered.
+#[cfg(windows)]
+pub fn pick_file(owner: Option<isize>, title: &str, name: &str, extensions: &[&str]) -> Result<String, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+    use windows::Win32::UI::Shell::{
+        FileOpenDialog, IFileOpenDialog, IShellItem, SIGDN_FILESYSPATH,
+    };
+
+    let pattern: Vec<u16> = extensions
+        .iter()
+        .map(|extension| format!("*.{extension}"))
+        .collect::<Vec<_>>()
+        .join(";")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let name: Vec<u16> = format!("{name} ").encode_utf16().collect();
+    let title: Vec<u16> = format!("{title} ").encode_utf16().collect();
+
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+            .ok()
+            .map_err(|error| format!("Cannot start the file picker: {error}"))?;
+        let chosen = (|| -> Result<String, String> {
+            let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None::<&windows::core::IUnknown>, CLSCTX_ALL)
+                .map_err(|error| format!("Cannot create the file picker: {error}"))?;
+            let filter = [COMDLG_FILTERSPEC {
+                pszName: PCWSTR(name.as_ptr()),
+                pszSpec: PCWSTR(pattern.as_ptr()),
+            }];
+            dialog
+                .SetFileTypes(&filter)
+                .map_err(|error| format!("Cannot filter the file picker: {error}"))?;
+            dialog
+                .SetTitle(PCWSTR(title.as_ptr()))
+                .map_err(|error| format!("Cannot title the file picker: {error}"))?;
+            let window = owner.map(|handle| HWND(handle as *mut core::ffi::c_void));
+            if let Err(error) = dialog.Show(window) {
+                return if error.code().0 as u32 == 0x8007_04C7 {
+                    Ok(String::new())
+                } else {
+                    Err(format!("The file picker could not open: {error}"))
+                };
+            }
+            let item: IShellItem = dialog
+                .GetResult()
+                .map_err(|error| format!("The file picker returned nothing: {error}"))?;
+            let path = item
+                .GetDisplayName(SIGDN_FILESYSPATH)
+                .map_err(|error| format!("That choice has no file path: {error}"))?;
+            let text = path
+                .to_string()
+                .map_err(|error| format!("That file path could not be read: {error}"))?;
+            CoTaskMemFree(Some(path.0 as *const core::ffi::c_void));
+            Ok(text)
+        })();
+        CoUninitialize();
+        chosen
+    }
+}
+
+#[cfg(not(windows))]
+pub fn pick_file(
+    _owner: Option<isize>,
+    _title: &str,
+    _name: &str,
+    _extensions: &[&str],
+) -> Result<String, String> {
+    Err("The native file picker is only available on Windows".into())
+}
+
 #[cfg(not(windows))]
 pub fn pick_folder(_owner: Option<isize>) -> Result<String, String> {
     Err("The native folder picker is only available on Windows".into())

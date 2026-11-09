@@ -24,7 +24,7 @@ export function formatGain(gain: number) {
   return `${Math.round(gain * 100)} % · ${Number.isFinite(db) ? `${db > 0 ? '+' : '−'}${Math.abs(db).toFixed(1)} dB` : '−∞ dB'}`;
 }
 
-export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Processors' | 'Eq' | 'Master' | 'Spatial' | 'Library' | 'Devices';
+export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Processors' | 'Eq' | 'Synth' | 'Master' | 'Spatial' | 'Library' | 'Devices';
 export type Theme = 'Ion' | 'Violet' | 'Ember';
 
 export const workspaces: Record<Workspace, { label: string; title: string; description: string }> = {
@@ -33,6 +33,7 @@ export const workspaces: Record<Workspace, { label: string; title: string; descr
   Flow: { label: 'Signal chain', title: 'Signal chain', description: 'Every stage between the decoded file and the output.' },
   Processors: { label: 'Processors', title: 'Processors', description: 'The six processors, in the order the audio reaches them.' },
   Eq: { label: 'Equaliser', title: 'Equaliser', description: 'The parametric bands the audio path is running.' },
+  Synth: { label: 'Synth', title: 'Synth', description: 'Two oscillators with unison and wavetables, five filter models, a modulation matrix and the rack, played from a keyboard.' },
   Master: { label: 'Master', title: 'Master', description: 'Export a file through the rack, and measure it before and after.' },
   Spatial: { label: 'Spatial field', title: 'Spatial field', description: 'The virtual speakers the renderer is using.' },
   Library: { label: 'Library', title: 'Library', description: 'Local files, decoded in the app.' },
@@ -317,3 +318,166 @@ export const themes: Record<Theme, { primary: string; secondary: string }> = {
   Violet: { primary: '#a38bff', secondary: '#75c3ff' },
   Ember: { primary: '#ffb67d', secondary: '#f3707d' },
 };
+
+// ---------- the instrument ----------
+
+export type SynthWave = 'saw' | 'square' | 'triangle' | 'sine' | 'table';
+export type SynthFilterKind = 'lowpass' | 'bandpass' | 'highpass' | 'ladder' | 'comb' | 'notch' | 'peak';
+export type LfoTarget = 'pitch' | 'filter' | 'amp';
+export type LfoWave = 'sine' | 'triangle';
+export type ModSource = 'lfo1' | 'lfo2' | 'env1' | 'env2' | 'velocity' | 'key' | 'wheel' | 'pressure'
+  | 'macro1' | 'macro2' | 'macro3' | 'macro4';
+export type ModTarget = 'pitch' | 'cutoff' | 'resonance' | 'osc1' | 'osc2' | 'sub' | 'noise' | 'pan';
+/** How a source's travel is bent before it reaches the destination. */
+export type ModCurve = 'linear' | 'exp' | 'log' | 's';
+
+/** One route: a source, a destination, how far it moves and how it is shaped. */
+export interface SynthMod { source: ModSource; target: ModTarget; amount: number; curve: ModCurve }
+
+export interface SynthOscillator {
+  wave: SynthWave; octave: number; semitone: number; cents: number; level: number;
+  /** Detuned copies summed into this oscillator, 1 to 8. */
+  unison: number; detune: number; spread: number;
+  /** Which table a `table` oscillator reads, and where in it the morph sits. */
+  table: number; morph: number;
+}
+/** Seconds, except sustain, which is a share of the envelope's height. */
+export interface SynthEnvelope { attack: number; decay: number; sustain: number; release: number }
+export interface SynthFilter { kind: SynthFilterKind; cutoff: number; resonance: number; envAmount: number; keyTrack: number; drive: number }
+export interface SynthLfo { wave: LfoWave; rate: number; depth: number; target: LfoTarget }
+
+/** A patch. The Rust `SynthConfig` is this shape exactly, field for field. */
+export interface SynthPatch {
+  level: number; glideMs: number;
+  osc1: SynthOscillator; osc2: SynthOscillator;
+  sub: number; noise: number;
+  filter: SynthFilter;
+  amp: SynthEnvelope; filterEnv: SynthEnvelope;
+  lfo: SynthLfo; lfo2: SynthLfo;
+  /** The matrix: summed routes into the patch's own parameters. */
+  mods: SynthMod[];
+  /** Four performance knobs the matrix can read, so one gesture is several moves. */
+  macros: [number, number, number, number];
+  /** Cents of offset from equal temperament, one per key. Empty is equal. */
+  tuning: number[];
+}
+
+export const defaultSynth: SynthPatch = {
+  level: 0.7, glideMs: 0,
+  osc1: { wave: 'saw', octave: 0, semitone: 0, cents: 0, level: 0.8, unison: 1, detune: 0, spread: 0, table: 0, morph: 0 },
+  osc2: { wave: 'saw', octave: -1, semitone: 0, cents: 7, level: 0.3, unison: 1, detune: 0, spread: 0, table: 0, morph: 0 },
+  sub: 0, noise: 0,
+  filter: { kind: 'lowpass', cutoff: 3200, resonance: 0.15, envAmount: 0.35, keyTrack: 0.3, drive: 0 },
+  amp: { attack: 0.004, decay: 0.25, sustain: 0.7, release: 0.35 },
+  filterEnv: { attack: 0.002, decay: 0.4, sustain: 0.15, release: 0.3 },
+  lfo: { wave: 'sine', rate: 5, depth: 0, target: 'filter' },
+  lfo2: { wave: 'triangle', rate: 0.8, depth: 0, target: 'filter' },
+  mods: [],
+  macros: [0, 0, 0, 0],
+  tuning: [],
+};
+
+/** The engine's own ranges, so a control cannot ask for a value it would refuse. */
+export const synthLimits = {
+  level: { min: 0, max: 1, step: 0.01 },
+  glide: { min: 0, max: 500, step: 5 },
+  octave: { min: -2, max: 2 },
+  semitone: { min: -12, max: 12 },
+  cents: { min: -100, max: 100, step: 1 },
+  oscLevel: { min: 0, max: 1, step: 0.01 },
+  sub: { min: 0, max: 1, step: 0.01 },
+  noise: { min: 0, max: 1, step: 0.01 },
+  cutoff: { min: 20, max: 20000, step: 1 },
+  resonance: { min: 0, max: 1, step: 0.01 },
+  envAmount: { min: -4, max: 4, step: 0.05 },
+  keyTrack: { min: 0, max: 1, step: 0.01 },
+  drive: { min: 0, max: 1, step: 0.01 },
+  macro: { min: 0, max: 1, step: 0.01 },
+  attack: { min: 0.001, max: 5, step: 0.001 },
+  decay: { min: 0.001, max: 10, step: 0.001 },
+  sustain: { min: 0, max: 1, step: 0.01 },
+  release: { min: 0.005, max: 10, step: 0.001 },
+  rate: { min: 0.05, max: 20, step: 0.05 },
+  depth: { min: 0, max: 1, step: 0.01 },
+  unison: { min: 1, max: 8, step: 1 },
+  detune: { min: 0, max: 50, step: 1 },
+  spread: { min: 0, max: 1, step: 0.01 },
+  morph: { min: 0, max: 1, step: 0.01 },
+  modAmount: { min: -1, max: 1, step: 0.01 },
+} as const;
+
+export const synthWaves: { id: SynthWave; label: string }[] = [
+  { id: 'saw', label: 'Saw' }, { id: 'square', label: 'Square' },
+  { id: 'triangle', label: 'Triangle' }, { id: 'sine', label: 'Sine' },
+  { id: 'table', label: 'Table' },
+];
+export const synthFilterKinds: { id: SynthFilterKind; label: string }[] = [
+  { id: 'lowpass', label: 'Low pass' }, { id: 'bandpass', label: 'Band pass' }, { id: 'highpass', label: 'High pass' },
+  { id: 'ladder', label: 'Ladder' }, { id: 'comb', label: 'Comb' },
+  { id: 'notch', label: 'Notch' }, { id: 'peak', label: 'Peak' },
+];
+export const modSources: { id: ModSource; label: string }[] = [
+  { id: 'lfo1', label: 'LFO 1' }, { id: 'lfo2', label: 'LFO 2' },
+  { id: 'env1', label: 'Amp env' }, { id: 'env2', label: 'Filter env' },
+  { id: 'velocity', label: 'Velocity' }, { id: 'key', label: 'Key' }, { id: 'wheel', label: 'Wheel' },
+  { id: 'pressure', label: 'Pressure' },
+  { id: 'macro1', label: 'Macro 1' }, { id: 'macro2', label: 'Macro 2' },
+  { id: 'macro3', label: 'Macro 3' }, { id: 'macro4', label: 'Macro 4' },
+];
+export const modCurves: { id: ModCurve; label: string }[] = [
+  { id: 'linear', label: 'Linear' }, { id: 'exp', label: 'Exp' },
+  { id: 'log', label: 'Log' }, { id: 's', label: 'S' },
+];
+export const modTargets: { id: ModTarget; label: string }[] = [
+  { id: 'pitch', label: 'Pitch' }, { id: 'cutoff', label: 'Cutoff' }, { id: 'resonance', label: 'Resonance' },
+  { id: 'osc1', label: 'Osc 1 level' }, { id: 'osc2', label: 'Osc 2 level' },
+  { id: 'sub', label: 'Sub level' }, { id: 'noise', label: 'Noise level' }, { id: 'pan', label: 'Pan' },
+];
+export const lfoTargets: { id: LfoTarget; label: string }[] = [
+  { id: 'pitch', label: 'Pitch' }, { id: 'filter', label: 'Filter' }, { id: 'amp', label: 'Amp' },
+];
+export const lfoWaves: { id: LfoWave; label: string }[] = [
+  { id: 'sine', label: 'Sine' }, { id: 'triangle', label: 'Triangle' },
+];
+
+/** What the engine reports while it is running. */
+export interface SynthStatus {
+  running: boolean; voices: number; peakDb: number; device: string; midi: string;
+  recording: boolean; recordedSeconds: number; error: string | null;
+  /** The output's own trace, oldest column first, as low/high pairs in frames. */
+  scope: number[];
+}
+export const idleSynthStatus: SynthStatus = {
+  running: false, voices: 0, peakDb: -120, device: '', midi: '',
+  recording: false, recordedSeconds: 0, error: null, scope: [],
+};
+
+export interface SynthScale { name: string; cents: number[] }
+
+export interface SynthPresetSummary { id: string; name: string; builtin: boolean }
+export interface SynthPatchList { patch: SynthPatch; active: string | null; presets: SynthPresetSummary[]; tables: string[] }
+export const emptySynthPatches: SynthPatchList = { patch: defaultSynth, active: null, presets: [], tables: [] };
+
+/** "C4": the name every keyboard uses, from the MIDI number. */
+export function noteName(note: number): string {
+  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+  return `${names[((note % 12) + 12) % 12]}${Math.floor(note / 12) - 1}`;
+}
+
+/** An envelope in one line: "A 4 ms · D 250 ms · S 70 % · R 350 ms". */
+export const envelopeLine = (envelope: SynthEnvelope) => {
+  const ms = (seconds: number) => (seconds >= 1 ? `${seconds.toFixed(2)} s` : `${Math.round(seconds * 1000)} ms`);
+  return `A ${ms(envelope.attack)} · D ${ms(envelope.decay)} · S ${Math.round(envelope.sustain * 100)} % · R ${ms(envelope.release)}`;
+};
+
+/** What the instrument is doing, in one line a header can hold. */
+export function describeSynth(patch: SynthPatch, status: SynthStatus) {
+  const name = `${synthWaves.find(wave => wave.id === patch.osc1.wave)?.label ?? patch.osc1.wave} + ${synthWaves.find(wave => wave.id === patch.osc2.wave)?.label ?? patch.osc2.wave}`;
+  const filter = patch.filter.kind === 'lowpass' ? 'LP' : patch.filter.kind === 'bandpass' ? 'BP'
+    : patch.filter.kind === 'highpass' ? 'HP' : patch.filter.kind === 'ladder' ? 'Ladder' : 'Comb';
+  const stack = patch.osc1.unison > 1 || patch.osc2.unison > 1
+    ? ` · ${Math.max(patch.osc1.unison, patch.osc2.unison)}× unison`
+    : '';
+  const where = status.running ? `${status.device || 'output'} · ${status.voices} ${status.voices === 1 ? 'voice' : 'voices'}` : 'instrument idle';
+  return `${name}${stack} · ${filter} ${formatHz(patch.filter.cutoff)} · ${where}`;
+}

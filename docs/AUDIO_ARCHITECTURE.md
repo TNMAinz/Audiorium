@@ -434,3 +434,108 @@ before enough audio has arrived, and the UI shows a dash rather than a zero.
   and a missing id is an error, not a silent fallback to a different device.
 * A device that disappears mid-track reports the render error and closes the
   stream; the interface shows it in the inspector and the Library page.
+
+## 7. The instrument
+
+The synth (`synth.rs`, `synth_out.rs`) is the app's second source and its second
+clock. It is deliberately not a mode of the player: a file is read at whatever rate
+the device asks for, while an instrument has to be paced by the device and given a
+note before the next buffer is due. Both run through the same `Arc<ChainState>` and
+`Arc<Mutex<SpatialConfig>>`, so the rack is the instrument's effects section.
+
+```
+note events (page / QWERTY / MIDI)
+        |  bounded queue, drained once per buffer
+        v
++------------------------------------------------------------+
+| synth_out.rs stream thread                                 |
+|  Synth (16 voices) -> panner -> reverb -> eq -> compressor  |
+|  -> saturator -> limiter -> WASAPI render (shared, 48 kHz) |
++------------------------------------------------------------+
+```
+
+* **One stream.** `SynthState` holds an `alive` flag set before the thread starts and
+  cleared when it ends; a second `synth_start` waits for it instead of opening a
+  second reader of the same note queue. Two streams would each hold part of the
+  voices and answer one key with two.
+* **The output the Devices page names, not whatever Windows made default.**
+  `SynthState` keeps the chosen endpoint id (empty meaning the default) and
+  `resolve_output` walks the render collection for it exactly as the player's
+  `resolve_device` does, so one choice on that page is one output for the whole app.
+  A WASAPI stream cannot be repointed, so a different choice while the instrument
+  runs closes this stream and opens the chosen endpoint — the notes being held end
+  with the old stream, because nothing is carrying them any more. An id that is no
+  longer listed is refused rather than quietly falling back to the default.
+* **48 kHz, 32-bit float, stereo**, the same format as everything else. The buffer
+  request is 100 ms of device space (10 ms in practice) rather than the player's
+  400 ms, because an instrument has to answer a key, not fill a queue. Output is
+  clamped to ±1 after the rack; louder is the limiter's job, not the oscillator's.
+* **No allocation in the voice path.** Sixteen voices, their filter states, their
+  envelope states and their phases are allocated when the `Synth` is built. The
+  events queue is bounded and drained once per buffer, so a note arriving mid-buffer
+  is heard at the start of the next one and nothing grows without bound.
+* **Patch state is its own file.** `%APPDATA%\AUDIORIUM\synth.json` holds the patch,
+  the active preset and the user's saves, written whole by rename on a coalescing
+  thread. It is separate from the chain's `state.json` because the two are edited by
+  different parts of the app and neither may rewrite the other.
+* **A bounce is the same engine offline.** `render_events` replays the recorded
+  events through a fresh `Synth`, frame for frame, and `synth_bounce` runs the rack's
+  `process_rack` over the result — no spatial stage, because a bounce is a file and
+  the master page renders files through the rack alone. The take's events are rebased
+  to their first note, so the file does not open with the silence before the take.
+  With nothing recorded, a short arpeggio audition is rendered instead.
+* **The display is the output, not a drawing of it.** The stream thread peak-holds
+  the frames it hands to the device into 96 columns of a 2 ms window each — a 48 ms
+  trace — and publishes them with the status as low/high pairs, oldest first. That
+  is the `SynthScope` path: what the page draws is what the device was fed. A
+  stopped instrument has no trace, so the page draws the patch instead, from a port
+  of the same oscillator, filter and envelope maths (`voice.ts`), and says so.
+* **MIDI is input only, and speaks MPE.** `midi.rs` holds a `midir` port on a parked
+  thread and interprets note on/off, pitch bend (±2 semitones on the main channel),
+  CC 1 as the LFO depth, CC 120/123 as all-notes-off, polyphonic aftertouch and
+  channel pressure. An MPE controller's member channels (2-16) each carry one note,
+  so a bend or a pressure on a member channel is applied to that note alone rather
+  than to the whole keyboard. Everything else is ignored rather than guessed at.
+
+* **Unison is a stereo stack, not a louder one.** Each oscillator sums up to eight
+  copies, detuned edge to edge in cents and panned across the image by its spread;
+  the stack is divided by its own count's root, and each copy keeps its own phase,
+  which is why eight copies are wider rather than eight times as loud. The filter
+  runs per channel, so the width survives it.
+* **The matrix is summed per destination.** `Mod` holds a source, a destination, an
+  amount in the destination's own units and a curve. Every route is read into one
+  number per parameter each frame, so the sample loop walks eight destinations and
+  never the list. Sources are the two LFOs, both envelopes, velocity, key, the wheel,
+  per-note pressure and four performance macros — all values the engine already has,
+  so a route costs an add. The curve (linear, exponential, logarithmic or S) shapes
+  the source before the amount, and keeps its sign: two routes can share a source and
+  read it differently.
+* **Tables are band-limited by construction.** A table is up to eight frames of
+  harmonic levels, each built into a mip chain that halves the band as it halves the
+  length. A reading picks the longest copy its step can carry, so a note never asks
+  the oscillator for a harmonic the table cannot hold. The page draws the cycle
+  `synth_table_shape` returns, which is the frame the engine will read.
+* **A wavetable can be imported.** `synth_import_table` decodes a file with the same
+  decoder the player uses, cuts it into cycles of `TABLE_SAMPLES` (2 048) samples,
+  analyses each cycle's first 128 harmonics and adds the result to the registry.
+  Imported tables are appended after the four shipped ones and are written to
+  `%APPDATA%\AUDIORIUM	ables.json` as harmonic levels, so a launch rebuilds the same
+  mip chains. The registry is an `RwLock<Arc<Vec<Table>>>`: the audio thread takes one
+  snapshot a frame, a reference count rather than a lock, and a patch index keeps
+  naming the same table after a re-import of that name.
+* **Tunings are a table of offsets, applied on the key.** `scale.rs` turns Scala
+  files and the built-in scales into 128 cents of offset from equal temperament; the
+  voice adds the offset before the glide, so a scale is the key's own pitch rather
+  than an effect after it. Empty is equal temperament, which is what a patch starts
+  on.
+* **Four more filter models, each with its own state.** The ladder is four one-poles
+  with a saturating feedback run at twice the rate; the comb is a tuned delay fed
+  back on itself; notch and peak are the two bands the state variable rejects and
+  lifts, in the same structure as its low and high pass. None shares a state with
+  another model, so switching models mid-note cannot inherit another model's tail.
+  Drive is an input gain the ladder's saturation hears and the linear models are
+  compensated for, so the knob changes character rather than simply level.
+
+The instrument cannot affect a master's guarantees: the render path never opens a
+device, and the instrument never writes a file. The one shared thing is the rack's
+state, which both read.

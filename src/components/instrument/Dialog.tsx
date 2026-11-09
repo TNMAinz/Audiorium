@@ -1,0 +1,56 @@
+import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { X } from 'lucide-react';
+
+interface Props {
+  title: string;
+  /** The one line under the title: what the panel is set to right now. */
+  meta?: string;
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+  className?: string;
+}
+
+/**
+ * A panel that opens over the page, so the instrument's face stays one screen while
+ * every control still has room to be read and turned. A native dialog is used on
+ * purpose: it traps focus, closes on Escape and dims what is behind it without a
+ * line of that behaviour being written here.
+ */
+export function Dialog({ title, meta, open, onClose, children, className = '' }: Props) {
+  const node = useRef<HTMLDialogElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const id = useId();
+
+  useEffect(() => {
+    const dialog = node.current;
+    if (!dialog) return;
+    if (open && !dialog.open) {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      dialog.showModal();
+    } else if (!open && dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  return <dialog
+    ref={node}
+    className={`synth-dialog ${className}`}
+    aria-labelledby={id}
+    // Closing returns the focus to the control that opened the panel, which is what
+    // a keyboard user expects after a dialog that is not a page of its own.
+    onClose={() => { onClose(); opener.current?.focus(); }}
+    onClick={event => { if (event.target === event.currentTarget) onClose(); }}
+  >
+    <div className="synth-dialog-head">
+      <div className="synth-dialog-title">
+        <h2 id={id}>{title}</h2>
+        {meta && <p className="synth-dialog-meta mono">{meta}</p>}
+      </div>
+      <button type="button" className="icon-button" aria-label={`Close ${title}`} onClick={onClose}>
+        <X size={15} aria-hidden="true" />
+      </button>
+    </div>
+    <div className="synth-dialog-body">{children}</div>
+  </dialog>;
+}

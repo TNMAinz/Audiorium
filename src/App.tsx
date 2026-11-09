@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, AudioWaveform, Boxes, Disc3, Headphones, Home, SlidersHorizontal, SlidersVertical, Stamp } from 'lucide-react';
+import { Activity, AudioWaveform, Boxes, Disc3, Headphones, Home, Piano, SlidersHorizontal, SlidersVertical, Stamp } from 'lucide-react';
 import { AlbumGlobe } from './components/AlbumGlobe';
 import { AudioInspector } from './components/AudioInspector';
 import { PlayerBar } from './components/PlayerBar';
@@ -11,6 +11,7 @@ import { usePlayer } from './usePlayer';
 import { useArtwork } from './useArtwork';
 import { useChain } from './useChain';
 import { useRender } from './useRender';
+import { useSynth } from './useSynth';
 import { localMotionStorage, readReducedMotion, writeReducedMotion } from './motion';
 import { localThemeStorage, readTheme, writeTheme } from './themeMemory';
 import { SpatialFieldPage } from './pages/SpatialFieldPage';
@@ -18,6 +19,7 @@ import { AnalysisPage } from './pages/AnalysisPage';
 import { SignalChainPage } from './pages/SignalChainPage';
 import { ProcessorsPage } from './pages/ProcessorsPage';
 import { EqualiserPage } from './pages/EqualiserPage';
+import { SynthPage } from './pages/SynthPage';
 import { MasterPage } from './pages/MasterPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { LibraryPage } from './pages/LibraryPage';
@@ -29,6 +31,7 @@ const nav: { name: Workspace; label: string; icon: typeof Home; group: 'Explore'
   { name: 'Flow', label: 'Signal chain', icon: SlidersHorizontal, group: 'Explore' },
   { name: 'Processors', label: 'Processors', icon: SlidersVertical, group: 'Explore' },
   { name: 'Eq', label: 'Equaliser', icon: AudioWaveform, group: 'Explore' },
+  { name: 'Synth', label: 'Synth', icon: Piano, group: 'Explore' },
   { name: 'Master', label: 'Master', icon: Stamp, group: 'Explore' },
   { name: 'Library', label: 'Library', icon: Disc3, group: 'System' },
   { name: 'Devices', label: 'Devices', icon: Headphones, group: 'System' },
@@ -62,6 +65,12 @@ export function App() {
   const deckPaths = useMemo(() => (player.status.active ? [player.status.path] : []), [player.status.active, player.status.path]);
   const deckArtwork = useArtwork(library.result?.root ?? '', deckPaths);
   const chain = useChain(away);
+  // The instrument has its own stream, so it is suspended with the window in the
+  // tray like every other polling panel: the notes keep sounding, the page stops
+  // asking. Reduced motion quietens its trace poll the same way it quiets the
+  // analysis panels — the fifth of the rate, still live. Its output is the one
+  // the Devices page names, the same endpoint the player plays to.
+  const synth = useSynth(away, reduceMotion, analysis.output);
   // Rendering is not a playback concern: its thread runs on the engine's side and the
   // page only reports what it says, so a render carries on while the user is elsewhere.
   const render = useRender(library.result?.root ?? '');
@@ -86,6 +95,7 @@ export function App() {
         {workspace === 'Flow' && <SignalChainPage audio={analysis} chain={chain} track={player.status.active ? player.status.title : ''} volume={player.status.volume} onVolume={volume => void player.setVolume(volume)} onOpenProcessors={() => setWorkspace('Processors')} onOpenEq={() => setWorkspace('Eq')} />}
         {workspace === 'Processors' && <ProcessorsPage chain={chain} onOpenEq={() => setWorkspace('Eq')} />}
         {workspace === 'Eq' && <EqualiserPage chain={chain} />}
+        {workspace === 'Synth' && <SynthPage synth={synth} libraryRoot={library.result?.root ?? ''} chain={chain.chain} onOpenProcessors={() => setWorkspace('Processors')} onOpenEq={() => setWorkspace('Eq')} />}
         {workspace === 'Master' && <MasterPage library={library} player={player} chain={chain} render={render} />}
         {workspace === 'Library' && <LibraryPage library={library} player={player} />}
         {workspace === 'Devices' && <DevicesPage audio={analysis} error={player.error} />}

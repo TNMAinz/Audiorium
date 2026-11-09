@@ -16,6 +16,7 @@ audio path.
 | `flacenc` | 0.5.1 | Apache-2.0 | The FLAC encoder behind a lossless master: frame coding, `STREAMINFO` and metadata blocks. Used unmodified as a linked library |
 | `md-5` | 0.11.0 | MIT OR Apache-2.0 | The sample digest a FLAC `STREAMINFO` carries, so a master states its own MD5 |
 | `image` | 0.25 | MIT OR Apache-2.0 | Decoding a cover to a thumbnail, and reading a picture's dimensions for a FLAC `PICTURE` block |
+| `midir` | 0.11 (Windows only) | MIT | Reading a MIDI input port for the synth: note on/off, pitch bend and the mod wheel. The port is held by the module's own thread; nothing is sent to a device |
 
 Those crates plus `serde`, `symphonia`, `wasapi` and `windows` are the whole dependency
 set: the DSP is written in this repository and uses no external filter, FFT or metering

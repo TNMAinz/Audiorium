@@ -15,9 +15,11 @@ mod log;
 mod panner;
 mod presets;
 mod resample;
+mod scale;
 mod reverb;
 mod spatial;
 mod store;
+mod synth;
 mod tray;
 mod window;
 
@@ -30,9 +32,13 @@ mod driver;
 #[cfg(windows)]
 mod filescan;
 #[cfg(windows)]
+mod midi;
+#[cfg(windows)]
 mod player;
 #[cfg(windows)]
 mod render;
+#[cfg(windows)]
+mod synth_out;
 #[cfg(windows)]
 mod spatial_out;
 
@@ -61,9 +67,17 @@ fn main() {
             audio_state.spatial_handle(),
         );
         let render_state = Arc::new(render::RenderState::new());
+        // The instrument has a clock of its own and its own output stream, but
+        // plays through the same rack, which is what makes it part of this app
+        // rather than a second one.
+        let synth_state = synth_out::SynthState::new(
+            audio_state.chain_handle(),
+            audio_state.spatial_handle(),
+        );
         builder
             .manage(audio_state.chain_handle())
             .manage(render_state)
+            .manage(synth_state)
             .manage(audio_state.analysis_handle())
             .manage(audio_state)
             .manage(capture_state)
@@ -116,6 +130,30 @@ fn main() {
                 render::reference_measure,
                 render::null_test,
                 filescan::scan_file,
+                synth_out::synth_patch,
+                synth_out::set_synth,
+                synth_out::synth_status,
+                synth_out::synth_start,
+                synth_out::synth_stop,
+                synth_out::synth_note_on,
+                synth_out::synth_note_off,
+                synth_out::synth_all_notes_off,
+                synth_out::synth_bend,
+                synth_out::synth_mod_wheel,
+                synth_out::synth_apply_preset,
+                synth_out::synth_save_preset,
+                synth_out::synth_delete_preset,
+                synth_out::synth_record,
+                synth_out::synth_bounce,
+                synth_out::synth_table_shape,
+                synth_out::synth_import_table,
+                synth_out::synth_choose_table,
+                synth_out::synth_scales,
+                synth_out::synth_import_scale,
+                synth_out::synth_choose_scale,
+                synth_out::synth_midi_devices,
+                synth_out::synth_midi_open,
+                synth_out::synth_midi_close,
                 artwork::track_artwork,
                 library::scan_library,
                 library::choose_library_folder,

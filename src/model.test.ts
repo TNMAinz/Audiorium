@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { defaultChain, defaultOrder, isStageOrder, moveStage, themes, workspaces } from './model';
+import { defaultChain, defaultOrder, defaultSynth, describeSynth, idleSynthStatus, isStageOrder, moveStage, themes, workspaces } from './model';
 
 describe('workspace and scene configuration', () => {
   it('defines accessible copy for every navigation destination', () => {
-    expect(Object.keys(workspaces)).toEqual(['Orbit', 'Spectrum', 'Flow', 'Processors', 'Eq', 'Master', 'Spatial', 'Library', 'Devices']);
+    expect(Object.keys(workspaces)).toEqual(['Orbit', 'Spectrum', 'Flow', 'Processors', 'Eq', 'Synth', 'Master', 'Spatial', 'Library', 'Devices']);
     for (const item of Object.values(workspaces)) {
       expect(item.title.length).toBeGreaterThan(0);
       expect(item.description.length).toBeGreaterThan(0);
@@ -26,5 +26,20 @@ describe('workspace and scene configuration', () => {
       expect(theme.primary).toMatch(/^#[0-9a-f]{6}$/i);
       expect(theme.secondary).toMatch(/^#[0-9a-f]{6}$/i);
     }
+  });
+});
+
+describe('the patch description', () => {
+  it('names the unison stack and the filter model it will play', () => {
+    const stack = {
+      ...defaultSynth,
+      osc1: { ...defaultSynth.osc1, unison: 7 },
+      filter: { ...defaultSynth.filter, kind: 'ladder' as const },
+    };
+    const line = describeSynth(stack, idleSynthStatus);
+    expect(line).toContain('7× unison');
+    expect(line).toContain('Ladder');
+    // A patch without a stack says nothing about one.
+    expect(describeSynth(defaultSynth, idleSynthStatus)).not.toContain('unison');
   });
 });

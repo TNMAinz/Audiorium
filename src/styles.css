@@ -518,7 +518,10 @@ button svg { flex-shrink: 0; }
 
 /* ---------- instrument stack ---------- */
 .inspector { grid-area: inspector; min-height: 0; z-index: 2; }
-.instrument-stack { display: grid; grid-template-rows: minmax(128px, 1.5fr) minmax(118px, 1.5fr) minmax(84px, 1fr) minmax(80px, .95fr) minmax(78px, .9fr); gap: 0; position: relative; padding-top: var(--rail-top); }
+/* The two figure cards are the ones with a fixed number of lines — three route rows and
+   four room figures, each with its own note — so they keep a share big enough to hold
+   them at every window height instead of being squeezed until their rows touch. */
+.instrument-stack { display: grid; grid-template-rows: minmax(124px, 1.45fr) minmax(112px, 1.4fr) minmax(84px, .92fr) minmax(80px, 1.02fr) minmax(126px, 1.05fr); gap: 0; position: relative; padding-top: var(--rail-top); }
 .instrument-stack > section.glass-panel {
   position: relative; padding: 14px 16px; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   background: transparent;
@@ -582,7 +585,9 @@ button svg { flex-shrink: 0; }
    in tracked mono caps on the left and the value right-aligned in tabular figures, so a
    number changing width never shifts the row it sits in. */
 .readout { flex: 1; min-height: 0; display: grid; align-content: center; gap: 0; margin: 4px 0 0; }
-.readout > div { display: grid; grid-template-columns: 54px minmax(0, 1fr); align-items: baseline; gap: 8px; min-height: 0; font-size: var(--fs-micro); line-height: 1.25; }
+/* A readout row is one line of type tall. A panel too short for its rows clips at its own
+   edge; it never lets one row's figure land on the row beneath it. */
+.readout > div { display: grid; grid-template-columns: 54px minmax(0, 1fr); align-items: baseline; gap: 8px; min-height: 13px; font-size: var(--fs-micro); line-height: 1.25; }
 .readout dt { font-family: var(--font-mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: #6d7889; }
 .readout dd { margin: 0; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: #c9d5e4; }
 /* The route is a path, so it carries a spine: one node per stage, the last one lit. */
@@ -1096,7 +1101,7 @@ select:disabled { opacity: .55; }
   .preview-chrome-label { padding-right: 8px; }
 }
 @media (max-height: 800px) {
-  .instrument-stack { grid-template-rows: minmax(100px, 1.35fr) minmax(96px, 1.35fr) minmax(68px, .95fr) minmax(70px, .9fr) minmax(62px, .85fr); gap: 6px; }
+  .instrument-stack { grid-template-rows: minmax(92px, 1.2fr) minmax(88px, 1.18fr) minmax(62px, .8fr) minmax(104px, 1.02fr) minmax(110px, 1.02fr); gap: 6px; }
   .instrument-stack > section.glass-panel { padding: 8px 16px; }
   .spatial-options { gap: 4px; }
   .spatial-options select { padding: 5px 20px 5px 6px; }
@@ -1782,3 +1787,282 @@ select:disabled { opacity: .55; }
 .file-scan-wave-fill { fill: rgb(var(--lit-rgb) / .28); stroke: var(--accent); stroke-width: 1; }
 .file-scan-loudness-line { fill: none; stroke: #f0bc92; stroke-width: 1.4; }
 .file-scan-spectrum > canvas { image-rendering: pixelated; border-radius: 3px; }
+
+/* ---------- the instrument ---------- */
+/* One faceplate: the voice field across the top, the rack under it, the keyboard on
+   the floor. A panel that needs more room than a faceplate has opens in a dialog, so
+   nothing is squeezed until it overlaps the thing beside it. */
+.synth-page { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.synth-display { flex: 1; min-height: 0; gap: 6px; }
+.synth-tabs { flex: none; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.synth-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0;
+  padding: 6px 9px; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--inset); color: #cfdcee; text-align: left;
+}
+.synth-tab span { font-size: var(--fs-sm); }
+.synth-tab em {
+  max-width: 100%; font-style: normal; font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: .02em; color: #7f8da3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.synth-tab:hover { border-color: rgb(var(--lit-rgb) / .35); color: #eef5ff; }
+.synth-tab:hover em { color: #a9bdd6; }
+
+/* The display: the engine's own trace while it runs, the patch's own voice while it
+   does not. Both are drawn on the same axis, so the two states are comparable. */
+.synth-screen { position: relative; flex: 1; min-height: 96px; min-width: 0; display: flex; }
+.synth-scope {
+  position: relative; flex: 1; min-height: 0; min-width: 0; border-radius: var(--radius);
+  border: 1px solid var(--line); overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(120, 185, 212, .07), transparent 72%),
+    var(--inset);
+}
+.synth-scope svg { display: block; width: 100%; height: 100%; }
+.synth-scope-grid line { stroke: rgb(var(--rim-rgb) / .08); stroke-width: 1; vector-effect: non-scaling-stroke; }
+/* The voice is the output, so it is the colour the display is built from; the two
+   oscillators are drawn as thin traces over it, the way a scope shows the sum. */
+.synth-scope-body {
+  fill: rgb(var(--accent-rgb) / .16); stroke: rgb(var(--accent-rgb) / .5);
+  stroke-width: 1; stroke-linejoin: round; vector-effect: non-scaling-stroke;
+}
+/* A live trace is brighter than a preview: it is the engine speaking, not the patch. */
+.synth-scope-body.live {
+  fill: rgb(var(--accent-rgb) / .34); stroke: rgb(var(--accent-rgb) / .9);
+  filter: drop-shadow(0 0 6px rgb(var(--accent-rgb) / .35));
+}
+.synth-scope-osc { fill: none; stroke-width: 1; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.synth-scope-osc.one { stroke: rgba(207, 230, 255, .55); }
+.synth-scope-osc.two { stroke: rgb(var(--accent-2-rgb) / .5); }
+.synth-screen-tags {
+  position: absolute; inset: 7px 9px auto 9px; display: flex; align-items: center; gap: 10px;
+  pointer-events: none; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: #8e9cb1;
+}
+.synth-screen-tags span {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 5px;
+  border-radius: 2px; background: rgba(6, 10, 16, .6);
+}
+.synth-screen-tags .swatch { width: 10px; height: 2px; border-radius: 1px; background: #cfe6ff; }
+.synth-screen-tags .swatch.two { background: var(--accent-2); }
+.synth-screen-tags .swatch.body { background: var(--accent); }
+.synth-screen-peak { margin-left: auto; color: #c3d1e5; letter-spacing: .02em; }
+.synth-macros {
+  flex: none; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px;
+  padding-top: 8px; border-top: 1px solid var(--line-soft);
+}
+.synth-macros .knob { width: 100%; }
+
+/* A short window gives the display its room back before a control can leave the
+   card: the readouts under the faceplate knobs go, the screen keeps a usable floor,
+   and below a small laptop's height the page scrolls instead of squeezing the
+   instrument into a strip. */
+@media (max-height: 820px) {
+  .synth-screen { min-height: 56px; }
+  .synth-macros .knob-readout { display: none; }
+}
+@media (max-height: 780px) {
+  .synth-page { min-height: 620px; }
+}
+@media (max-height: 680px) {
+  .synth-page { min-height: 760px; }
+}
+
+/* The rack's place on this page: six stages, in the order the voices pass through
+   them, each one a way through to the controls that own it. */
+.synth-fx { flex: none; }
+.synth-fx-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+.synth-fx-chip {
+  display: flex; align-items: center; gap: 7px; min-width: 0; padding: 7px 9px;
+  border-radius: var(--radius); border: 1px solid var(--line); background: var(--inset); color: #aab6c6;
+}
+.synth-fx-chip.on {
+  color: #e9f3ff; border-color: rgb(var(--accent-rgb) / .4);
+  background: rgb(var(--accent-rgb) / .07); box-shadow: inset 2px 0 0 var(--accent);
+}
+.synth-fx-index { font-size: 9px; color: #6c7889; }
+/* The lamp is the state, the way a rack's own lamps are: no word has to fit beside
+   the name to say whether a stage is in the path. */
+.synth-fx-lamp { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #333c49; }
+.synth-fx-chip.on .synth-fx-lamp { background: #7ef0c0; box-shadow: 0 0 6px rgba(126, 240, 192, .7); }
+.synth-fx-name { min-width: 0; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.synth-fx > .panel-note { margin-top: 8px; }
+
+/* The patch in the header: the name, and the way into the book. */
+.synth-patch-chip {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 240px; padding: 6px 10px;
+  border-radius: var(--radius); border: 1px solid var(--line); background: var(--inset);
+  color: #dfe8f5; font-size: var(--fs-sm);
+}
+.synth-patch-chip span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.synth-patch-chip svg { flex: none; color: #7f8da3; }
+.synth-patch-chip:hover { border-color: rgb(var(--lit-rgb) / .35); }
+
+/* ---------- the panels, over the page ---------- */
+.synth-dialog {
+  width: min(880px, 92vw); max-height: min(86vh, 720px); padding: 0; color: var(--text);
+  border: 1px solid var(--panel-line); border-radius: 5px; background: var(--panel);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .6); overflow: hidden;
+}
+.synth-dialog:not([open]) { display: none; }
+.synth-dialog[open] { display: flex; flex-direction: column; }
+.synth-dialog::backdrop { background: rgba(3, 5, 10, .62); backdrop-filter: blur(2px); }
+.synth-dialog-head {
+  flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 14px 16px 12px; border-bottom: 1px solid var(--line);
+}
+.synth-dialog-title { min-width: 0; }
+.synth-dialog-title h2 { margin: 0; font-size: var(--fs-title); font-weight: 500; color: #eef3fa; }
+.synth-dialog-meta {
+  margin: 4px 0 0; font-size: 10px; letter-spacing: .03em; color: #8390a4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.synth-dialog-body { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.synth-panel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 24px; }
+/* Inside the grid each section is a cell of its own: no rule between neighbours. */
+.synth-panel-grid > .synth-section + .synth-section { margin-top: 0; padding-top: 0; border-top: 0; }
+
+.synth-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.synth-section + .synth-section { margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.synth-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.synth-section-head h3 {
+  margin: 0; font-family: var(--font-mono); font-size: 10px; font-weight: 400;
+  letter-spacing: .1em; text-transform: uppercase; color: #8290a4; white-space: nowrap;
+}
+.synth-figures {
+  min-width: 0; font-family: var(--font-mono); font-size: 10px; color: #93a0b3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.synth-knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 8px 10px; justify-items: center; }
+.synth-knobs .knob { width: 100%; }
+.synth-knobs.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.synth-field { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* A select in a panel keeps the instrument's own type: it is a choice of model or
+   destination, not a form field, and it sits in the row it belongs to. */
+.synth-select {
+  min-width: 0; max-width: 100%; padding: 5px 22px 5px 8px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--inset); color: #cfdcee;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .02em;
+}
+.synth-select:hover { border-color: rgb(var(--lit-rgb) / .35); }
+/* One route a line: source, arrow, destination, amount. The list scrolls inside the
+   dialog rather than growing it past the window. */
+.synth-mod-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 236px; overflow-y: auto; }
+.synth-mod-route {
+  display: grid; grid-template-columns: minmax(0, 1fr) 12px minmax(0, 1fr) 78px 26px;
+  align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--inset);
+}
+.synth-mod-route .synth-select { width: 100%; }
+/* The curve belongs to the route, not to one of its two ends, so it takes its own
+   line under source → destination. */
+.synth-mod-route .synth-mod-curve { grid-column: 1 / -1; }
+.synth-mod-arrow { color: #6d7889; font-size: 11px; }
+.synth-facts { display: grid; gap: 3px; margin: 8px 0 0; }
+.synth-facts > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; font-size: var(--fs-micro); }
+.synth-facts dt { font-family: var(--font-mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: #6d7889; }
+.synth-facts dd { margin: 0; color: #b9c6d8; }
+
+/* An envelope drawn by running its own recurrence: the attack is a line and the tail
+   is a curve, because that is what the engine plays. */
+.synth-envelope-graph {
+  width: 100%; height: 104px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--inset);
+}
+.synth-graph-grid { stroke: rgb(var(--rim-rgb) / .09); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.synth-graph-mark { stroke: rgb(var(--rim-rgb) / .2); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.synth-graph-line { fill: rgb(var(--lit-rgb) / .1); stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+
+/* The patch book: a list that scrolls under its own rail, and the one field that
+   turns the patch in hand into a named one. */
+.synth-book-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; }
+.synth-patches { flex: 1; min-height: 180px; margin: 0 -4px; }
+.synth-patches .scroll-view { display: grid; align-content: start; gap: 2px; padding: 0 4px; }
+.synth-book-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.synth-patch {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 9px; border: 0; border-radius: 2px; background: transparent;
+  color: #c3cedd; font-size: var(--fs-sm); text-align: left;
+}
+.synth-patch em { font-style: normal; font-size: 9px; letter-spacing: .06em; color: #6f7c90; text-transform: uppercase; }
+.synth-patch:hover { background: rgba(255, 255, 255, .04); }
+.synth-patch.selected {
+  background: rgb(var(--accent-rgb) / .12); color: #eaf3ff;
+  box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / .3);
+}
+.synth-save { display: flex; gap: 6px; flex: none; }
+.synth-name {
+  flex: 1; min-width: 0; padding: 6px 8px; border-radius: 3px; border: 1px solid var(--line);
+  background: var(--inset); color: #dde6f2; font: inherit; font-size: var(--fs-sm);
+}
+.synth-name:focus-visible { outline: 2px solid var(--accent-light); outline-offset: -1px; }
+
+/* The take: transport, capture, bounce, the MIDI port and the output level. */
+.synth-run-row { display: flex; align-items: center; gap: 8px; }
+.synth-run-row .page-button { flex: 1; justify-content: center; }
+.synth-bounced { font-family: var(--font-mono); color: #9dbfe4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.synth-levels { display: flex; align-items: center; gap: 8px; }
+.synth-peak { flex: 1; height: 6px; border-radius: 3px; background: var(--inset); border: 1px solid var(--line); overflow: hidden; }
+.synth-peak i { display: block; height: 100%; background: linear-gradient(90deg, rgb(var(--accent-rgb) / .55), var(--accent)); }
+.synth-levels .mono { font-size: 10px; color: #9aa8bb; min-width: 62px; text-align: right; }
+.synth-midi {
+  width: 100%; padding: 6px 8px; border-radius: 3px; border: 1px solid var(--line);
+  background: var(--inset); color: #dde6f2; font: inherit; font-size: var(--fs-sm);
+}
+
+/* ---------- the keyboard ---------- */
+/* The keyboard is the page's floor: it stays where the hands expect it. */
+.synth-keys { flex: none; gap: 6px; }
+.synth-keyboard-tools { display: flex; align-items: center; gap: 10px; flex: none; }
+.piano { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.piano-keys {
+  position: relative; display: flex; gap: 1px; height: 92px; padding: 0;
+  border: 1px solid var(--line); border-radius: var(--radius); background: #080c12; overflow: hidden;
+}
+.piano-key { font: inherit; border: 0; cursor: pointer; padding: 0; touch-action: none; }
+.piano-key.white {
+  position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+  justify-content: flex-end; align-items: center; gap: 2px; padding-bottom: 5px;
+  border-radius: 0 0 2px 2px; background: linear-gradient(#f2f6fb, #c8d2e0); color: #4a5566;
+  font-size: 9px;
+}
+.piano-key.white:hover { background: linear-gradient(#ffffff, #dbe5f2); }
+.piano-key.black {
+  position: absolute; top: 0; height: 62%; z-index: 2;
+  /* The centring is its own property, not part of `transform`. A press applies the
+     shared `button:active` scale through `transform`, and while the two shared that
+     property the scale replaced this shift and threw the key half a width sideways. */
+  translate: -50% 0;
+  border-radius: 0 0 2px 2px; display: flex; flex-direction: column; justify-content: flex-end;
+  align-items: center; padding-bottom: 4px; background: linear-gradient(#212b3a, #0a0e15);
+  color: #8b9ab0; font-size: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, .5);
+}
+.piano-key.black:hover { background: linear-gradient(#2b3a4e, #111823); }
+.piano-key.black:active:not(:disabled) { transform: scale(.97); }
+.piano-key.white:active:not(:disabled) { transform: scale(.985); }
+.piano-key.held { background: linear-gradient(#d7e9ff, #7fb3ea); color: #1d3a5c; }
+.piano-key.black.held { background: linear-gradient(#3f6f9e, #1d344b); color: #cfe6ff; }
+.piano-key:disabled { cursor: default; opacity: .55; }
+.piano-hint { font-family: var(--font-mono); line-height: 1; text-transform: uppercase; }
+.piano-name { font-family: var(--font-mono); font-size: 8px; opacity: .65; line-height: 1; }
+.piano-tools { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.piano-note { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.piano-octave { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 3px; }
+.piano-octave button {
+  display: grid; place-items: center; width: 22px; height: 20px; border-radius: 2px;
+  border: 1px solid var(--line); background: var(--inset); color: #b6c3d4; font-size: 13px; line-height: 1;
+}
+.piano-octave button:hover { border-color: rgb(var(--lit-rgb) / .35); color: #eaf3ff; }
+.piano-octave span { min-width: 30px; text-align: center; font-size: 10px; color: #8d9bb0; }
+
+@media (max-width: 1080px) {
+  .synth-fx-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .synth-panel-grid { grid-template-columns: minmax(0, 1fr); }
+  .synth-panel-grid > .synth-section + .synth-section { margin-top: 0; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+}
+@media (max-width: 760px) {
+  .synth-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .synth-fx-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .synth-book-grid { grid-template-columns: minmax(0, 1fr); }
+}
