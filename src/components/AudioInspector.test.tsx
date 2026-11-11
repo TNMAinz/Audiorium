@@ -24,7 +24,7 @@ const analysis: Analysis = {
 const chain: Chain = {
   native: true, chain: defaultChain, meters: idleMeters, eqCurve: idleEqResponse, error: '',
   presets: emptyPresets, patchError: '',
-  setPanner: () => {}, setReverb: () => {}, setLimiter: () => {}, setCompressor: () => {}, setSaturator: () => {}, setOrder: () => {}, setStereoMode: () => {}, randomizeReverb: () => {},
+  setPanner: () => {}, setReverb: () => {}, setLimiter: () => {}, setCompressor: () => {}, setSaturator: () => {}, setEffect: () => {}, setOrder: () => {}, setStereoMode: () => {}, randomizeReverb: () => {},
   setEq: () => {}, updateFilter: () => {}, addFilter: () => {}, removeFilter: () => {},
   resetEq: () => {}, matchHeadroom: () => {},
   applyPreset: () => {}, renamePreset: async () => true, deletePreset: () => {},

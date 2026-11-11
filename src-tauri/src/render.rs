@@ -35,7 +35,7 @@ fn tail_frames(config: &ChainConfig) -> usize {
     } else {
         0.0
     };
-    (room as usize) + 72 + 48 + 2_400
+    (room as usize) + crate::fx::tail_frames(&config.effects) + 72 + 48 + 2_400
 }
 
 /// What the master page shows while and after a render.

@@ -19,11 +19,25 @@ export interface KeyboardProps {
 const naturals = [0, 2, 4, 5, 7, 9, 11];
 /** The five sharps, keyed by the natural they sit above. */
 const sharps: Record<number, number> = { 0: 1, 2: 3, 5: 6, 7: 8, 9: 10 };
-/** The QWERTY row, in the shape of a keyboard: A is C, W is C sharp, S is D, and so
- * on up to K, which is the octave's C. The two rows are chromatic from end to end. */
-const letters = ['a', 'w', 's', 'e', 'd', 'f', 't', 'g', 'y', 'h', 'u', 'j', 'k'];
-const steps = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-const hints: Record<number, string> = Object.fromEntries(steps.map((step, index) => [step, letters[index]]));
+/**
+ * The QWERTY keys, laid out the way a piano is. Two letter rows are the white keys of
+ * two octaves — `z x c v b n m` and `q w e r t y u` — and the row above each one holds
+ * that octave's sharps, sitting above and to the right of the white key they belong to:
+ * `s` is C sharp above `z`, `d` is D sharp above `x`. `i` is the second octave's C, so
+ * the row reaches two whole octaves and the keyboard draws nothing the letters cannot
+ * play. This is the layout every tracker and DAW's computer keyboard uses, because the
+ * hands already know it: the left hand walks the low octave, the right hand the high one.
+ */
+const bindings: Record<string, number> = {
+  z: 0, s: 1, x: 2, d: 3, c: 4, v: 5, g: 6, b: 7, h: 8, n: 9, j: 10, m: 11,
+  q: 12, '2': 13, w: 14, '3': 15, e: 16, r: 17, '5': 18, t: 19, '6': 20, y: 21, '7': 22, u: 23, i: 24,
+};
+/** What is printed on each key, one key per note, so no key wears two hints. */
+const hints: Record<number, string> = {};
+Object.entries(bindings).forEach(([key, step]) => { hints[step] = key; });
+/** The two keys that move the bed instead of playing it: they are the only keys in
+ * the rows around the notes that are not notes themselves. */
+const octaveKeys: Record<string, number> = { '-': -12, '=': 12 };
 
 /**
  * A playable keyboard. Every key is a real button, so it can be reached by the
@@ -33,13 +47,25 @@ const hints: Record<number, string> = Object.fromEntries(steps.map((step, index)
 export function Keyboard({
   lowNote, octaves, held, onNoteOn, onNoteOff, computer = false, disabled = false,
 }: KeyboardProps) {
-  // The QWERTY row can be moved an octave at a time without changing the patch.
+  // The bed can be moved an octave at a time without changing the patch.
   const [base, setBase] = useState(lowNote);
   useEffect(() => { setBase(lowNote); }, [lowNote]);
   const typing = useRef(new Set<number>());
-  // The QWERTY row moves an octave at a time, by Z and X or by the two buttons
-  // under the keys. It never leaves the MIDI range.
-  const shift = (steps: number) => setBase(current => Math.min(108, Math.max(0, current + steps)));
+  // The bed never leaves the MIDI range, and it is the same bed the letters play on,
+  // so the last whole octave it can start on is the highest that still fits.
+  const span = octaves * 12;
+  const highest = Math.max(0, Math.floor((127 - span) / 12) * 12);
+  const shift = (by: number) => {
+    // A letter let go after the bed moved would name a different note, so the notes
+    // the letters are holding are released before the bed slides out from under them.
+    typing.current.forEach(note => onNoteOff(note));
+    typing.current.clear();
+    setBase(current => Math.min(highest, Math.max(0, current + by)));
+  };
+  // The bed follows the octave the letters start on, whether or not QWERTY is on: a
+  // key that is drawn is a key the mouse can play, and one that is labelled is a key
+  // the letters can play, so the two never disagree about what is on show.
+  const bed = Math.min(base, highest);
 
   const { whites, blacks, blackWidth } = useMemo(() => {
     const whites: { note: number; left: number }[] = [];
@@ -48,19 +74,19 @@ export function Keyboard({
     const width = 100 / count;
     for (let octave = 0; octave < octaves; octave += 1) {
       naturals.forEach(offset => {
-        whites.push({ note: lowNote + octave * 12 + offset, left: whites.length * width });
+        whites.push({ note: bed + octave * 12 + offset, left: whites.length * width });
         if (sharps[offset] !== undefined) {
           // A black key straddles the line its natural ends on.
-          blacks.push({ note: lowNote + octave * 12 + sharps[offset], left: whites.length * width });
+          blacks.push({ note: bed + octave * 12 + sharps[offset], left: whites.length * width });
         }
       });
     }
-    // A three-octave keyboard ends on a top C, not on a B: the octave is whole.
-    whites.push({ note: lowNote + octaves * 12, left: whites.length * width });
+    // The bed ends on a top C, not on a B: every octave it draws is whole.
+    whites.push({ note: bed + octaves * 12, left: whites.length * width });
     // A sharp is a share of a white key, never a fixed share of the whole bed: the
     // same keyboard then looks the same whether one octave is drawn or four.
     return { whites, blacks, blackWidth: width * 0.62 };
-  }, [lowNote, octaves]);
+  }, [bed, octaves]);
 
   useEffect(() => {
     if (!computer || disabled) return;
@@ -74,21 +100,22 @@ export function Keyboard({
     const down = (event: KeyboardEvent) => {
       if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || inField(event.target)) return;
       const key = event.key.toLowerCase();
-      if (key === 'z' || key === 'x') {
-        shift(key === 'x' ? 12 : -12);
+      const octave = octaveKeys[key];
+      if (octave !== undefined) {
+        shift(octave);
         return;
       }
-      const at = letters.indexOf(key);
-      if (at < 0) return;
-      const note = Math.min(127, base + steps[at]);
+      const step = bindings[key];
+      if (step === undefined) return;
+      const note = Math.min(127, bed + step);
       if (typing.current.has(note)) return;
       typing.current.add(note);
       onNoteOn(note, 0.85);
     };
     const up = (event: KeyboardEvent) => {
-      const at = letters.indexOf(event.key.toLowerCase());
-      if (at < 0) return;
-      const note = base + steps[at];
+      const step = bindings[event.key.toLowerCase()];
+      if (step === undefined) return;
+      const note = Math.min(127, bed + step);
       if (!typing.current.delete(note)) return;
       onNoteOff(note);
     };
@@ -103,7 +130,7 @@ export function Keyboard({
       window.removeEventListener('blur', releaseAll);
       releaseAll();
     };
-  }, [computer, disabled, base, onNoteOn, onNoteOff]);
+  }, [computer, disabled, bed, onNoteOn, onNoteOff]);
 
   // A pointer on the keys is a finger on a real keyboard: pressing one starts it,
   // and dragging moves that note to whatever key is under the cursor, releasing the
@@ -164,7 +191,7 @@ export function Keyboard({
 
   const key = (note: number, tone: 'white' | 'black', left: number) => {
     const on = held.has(note);
-    const hint = computer ? hints[note - base] : undefined;
+    const hint = computer ? hints[note - bed] : undefined;
     return <button
       key={note}
       type="button"
@@ -185,14 +212,17 @@ export function Keyboard({
       {whites.map(white => key(white.note, 'white', white.left))}
       {blacks.map(black => key(black.note, 'black', black.left))}
     </div>
-    {computer && <div className="piano-tools">
-      <p className="panel-note piano-note">QWERTY plays from {noteName(base)}. Z and X move it an octave.</p>
-      {/* The row can also be moved with the pointer, for anyone not on the letter keys. */}
+    <div className="piano-tools">
+      <p className="panel-note piano-note">{computer
+        ? `QWERTY plays from ${noteName(bed)}. - and = move it an octave.`
+        : `The arrows move the keyboard an octave; every key is played by the mouse.`}</p>
+      {/* The bed moves with the pointer too, and it moves whether or not the letters
+          are on, so the keys on show are never stuck on one octave. */}
       <div className="piano-octave">
-        <button type="button" aria-label="Move the QWERTY row down an octave" onClick={() => shift(-12)}>−</button>
-        <span className="mono" aria-hidden="true">{noteName(base)}</span>
-        <button type="button" aria-label="Move the QWERTY row up an octave" onClick={() => shift(12)}>+</button>
+        <button type="button" aria-label="Move the keyboard down an octave" onClick={() => shift(-12)}>−</button>
+        <span className="mono" aria-hidden="true">{noteName(bed)}</span>
+        <button type="button" aria-label="Move the keyboard up an octave" onClick={() => shift(12)}>+</button>
       </div>
-    </div>}
+    </div>
   </div>;
 }

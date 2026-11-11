@@ -13,7 +13,9 @@ import { Knob } from '../components/instrument/Knob';
 import { ScrollArea } from '../components/instrument/ScrollArea';
 import { Segmented } from '../components/instrument/Segmented';
 import { SynthScope } from '../components/instrument/SynthScope';
+import { WavetableEditor } from '../components/instrument/WavetableEditor';
 import { envelopePlot, previewVoice } from '../components/instrument/voice';
+import { activePatchName } from '../presets';
 import type { useSynth } from '../useSynth';
 import { Page } from './Page';
 
@@ -28,7 +30,7 @@ interface Props {
 }
 
 /** The panels that have more controls than a faceplate can hold. */
-type Panel = 'osc' | 'shape' | 'env' | 'mod' | 'take' | 'book';
+type Panel = 'osc' | 'table' | 'shape' | 'env' | 'mod' | 'take' | 'book';
 
 const percent = (value: number) => `${Math.round(value * 100)} %`;
 const signed = (value: number, unit: string) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value)} ${unit}`;
@@ -65,6 +67,18 @@ function tuningReport(tuning: number[]) {
 /** Whether the patch is playing a tuning exactly as the picker lists it. */
 const sameTuning = (a: number[], b: number[]) =>
   a.length > 0 && a.length === b.length && a.every((value, index) => Math.abs(value - b[index]) < 0.05);
+
+/**
+ * Which zone a MIDI channel belongs to. The masters sit at the ends of the strip and a
+ * zone only exists while it has member channels, so an empty patch shows no zones at all.
+ */
+function mpeZone(channel: number, lower: number, upper: number): 'master' | 'member' | '' {
+  if (channel === 1) return lower ? 'master' : '';
+  if (channel === 16) return upper ? 'master' : '';
+  if (lower && channel >= 2 && channel <= 1 + lower) return 'member';
+  if (upper && channel >= 16 - upper && channel <= 15) return 'member';
+  return '';
+}
 
 /**
  * An oscillator's panel: where it sits in pitch, how loud it is, how many copies it
@@ -110,7 +124,6 @@ function Oscillator({ label, osc, tables, onChange, onImport, canImport, busy }:
         onClick={onImport}
       >Import table…</button>
     </div>
-    <p className="panel-note">An imported table is read as harmonics: its cycle becomes a set of levels the engine can band-limit, so it plays clean at every pitch, and the file is kept between launches.</p>
   </section>;
 }
 
@@ -154,6 +167,8 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
   const [computer, setComputer] = useState(true);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [editingTable, setEditingTable] = useState<number | null>(null);
+  const [tableRevision, setTableRevision] = useState(0);
   const { refreshDevices } = synth;
 
   // A port list is what the machine has now, so it is read when the page opens
@@ -176,7 +191,7 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
       if (live) setCycles({ one, two });
     })();
     return () => { live = false; };
-  }, [synth.tableShape, patch.osc1.wave, patch.osc1.table, patch.osc1.morph, patch.osc2.wave, patch.osc2.table, patch.osc2.morph]);
+  }, [synth.tableShape, patch.osc1.wave, patch.osc1.table, patch.osc1.morph, patch.osc2.wave, patch.osc2.table, patch.osc2.morph, tableRevision]);
 
   // The display is redrawn when the patch changes, never per poll: one preview is
   // a note's worth of frames, and the same patch always draws the same note.
@@ -210,12 +225,15 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
     if (scale) synth.edit({ tuning: scale.cents.slice(0, 128) });
   };
 
+  // A pack is the engine's own shelf too, so the header names a pack patch as well
+  // as a shipped or saved one.
   const activeName = patches.active
-    ? patches.presets.find(preset => preset.id === patches.active)?.name ?? 'Unsaved'
+    ? activePatchName(synth.catalogue, patches.presets, patches.active) || 'Unsaved'
     : 'Unsaved patch';
   const stored = patches.presets.filter(preset => !preset.builtin);
   const activeSaved = patches.active && stored.some(preset => preset.id === patches.active);
   const enabled = chain.order.filter(stage => chain[stage].enabled).length;
+  const enabledEffects = chain.effects.filter(effect => effect.enabled).length;
   const wave = (id: SynthWave) => synthWaves.find(entry => entry.id === id)?.label ?? id;
     const filterName = (kind: SynthFilterKind) => synthFilterKinds.find(entry => entry.id === kind)?.label ?? kind;
   const tuning = tuningReport(patch.tuning);
@@ -311,7 +329,7 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
       <article className="page-card synth-fx">
         <div className="panel-heading">
           <h2>Effects</h2>
-          <span className="panel-meta mono">{enabled ? `${enabled} of 6 in path` : 'all bypassed'}</span>
+          <span className="panel-meta mono">{enabled || enabledEffects ? `${enabled} of 6 stages · ${enabledEffects} additional FX` : 'all bypassed'}</span>
         </div>
         <div className="synth-fx-row">
           {chain.order.map((stage, index) => <button
@@ -326,7 +344,7 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
             <span className="synth-fx-name">{shortName[stage]}</span>
           </button>)}
         </div>
-        <p className="panel-note">The rack is the instrument's effects section: what is heard here is what a bounce carries.</p>
+        <p className="panel-note">The rack is the instrument's effects section: its twelve additional effects run on the instrument and its bounce.</p>
       </article>
 
       <article className="page-card synth-keys">
@@ -345,7 +363,7 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
         </div>
         <Keyboard
           lowNote={48}
-          octaves={3}
+          octaves={2}
           held={synth.held}
           computer={computer}
           onNoteOn={synth.noteOn}
@@ -373,6 +391,57 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
           <Knob size={52} label="Output" value={patch.level} min={synthLimits.level.min} max={synthLimits.level.max} step={synthLimits.level.step} reset={0.7} format={percent} description="The level the voices leave at, before the rack" onChange={value => synth.edit({ level: value })} />
         </div>
       </section>
+      {synth.native && <section className="synth-section" aria-label="Wavetable editor">
+        <div className="synth-section-head">
+          <h3>Wavetable editor</h3>
+          <span className="synth-figures mono">{patches.tables.length > 4 ? `${patches.tables.length - 4} imported` : 'no imported tables'}</span>
+        </div>
+        <div className="synth-field">
+          <button
+            type="button"
+            className="page-button"
+            disabled={patches.tables.length <= 4}
+            title={patches.tables.length > 4
+              ? 'Draw a table’s frames and warp its spectrum, with undo for every edit'
+              : 'Import a table from an oscillator first'}
+            onClick={() => {
+              // The editor opens on something: the table left in hand, or the first imported one.
+              setEditingTable(current => current ?? (patches.tables.length > 4 ? 4 : null));
+              setPanel('table');
+            }}
+          >Open the editor</button>
+        </div>
+        <p className="panel-note">{patches.tables.length > 4
+          ? 'The editor has a panel of its own, so the waveform, its partials and the three ways of shaping them get the room they need.'
+          : 'Import a table from an oscillator to shape it here. A table is read as its first 128 harmonics, so it plays clean at every pitch, and the file is kept between launches.'}</p>
+      </section>}
+    </Dialog>
+
+    <Dialog
+      title="Wavetable editor"
+      meta={editingTable !== null && patches.tables[editingTable]
+        ? `${patches.tables[editingTable]} · ${patches.tables.length - 4} imported ${patches.tables.length - 4 === 1 ? 'table' : 'tables'}`
+        : 'no table open'}
+      open={panel === 'table'}
+      onClose={() => setPanel(null)}
+    >
+      <section className="synth-section" aria-label="Table">
+        <div className="synth-section-head">
+          <h3>Table</h3>
+          <select
+            className="synth-select"
+            aria-label="Select table to edit"
+            value={editingTable ?? ''}
+            onChange={event => setEditingTable(event.target.value === '' ? null : Number(event.target.value))}
+          >
+            <option value="">{patches.tables.length > 4 ? 'Choose a table' : 'No imported tables'}</option>
+            {patches.tables.slice(4).map((name, index) => <option key={index + 4} value={index + 4}>{name}</option>)}
+          </select>
+        </div>
+        {editingTable !== null
+          ? <WavetableEditor key={editingTable} table={editingTable} onSaved={() => setTableRevision(value => value + 1)} />
+          : <p className="panel-note">Choose an imported table to draw its frames or warp its spectrum. An edit keeps the table’s index, so every patch that points at it follows.</p>}
+      </section>
     </Dialog>
 
     <Dialog
@@ -394,12 +463,12 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
               {synthFilterKinds.map(kind => <option key={kind.id} value={kind.id}>{kind.label}</option>)}
             </select>
           </div>
-          <div className="synth-knobs">
-            <Knob size={52} label="Cutoff" value={cutoffPosition(patch.filter.cutoff)} min={0} max={1} step={0.001} reset={cutoffPosition(3200)} format={value => formatHz(cutoffHz(value))} announced={{ min: synthLimits.cutoff.min, max: synthLimits.cutoff.max, now: Math.round(patch.filter.cutoff) }} onChange={value => setFilter({ cutoff: Math.round(cutoffHz(value)) })} />
-            <Knob size={52} label="Resonance" value={patch.filter.resonance} min={synthLimits.resonance.min} max={synthLimits.resonance.max} step={synthLimits.resonance.step} reset={0.15} format={percent} onChange={value => setFilter({ resonance: value })} />
-            <Knob size={52} label="Env amount" value={patch.filter.envAmount} min={synthLimits.envAmount.min} max={synthLimits.envAmount.max} step={synthLimits.envAmount.step} reset={0.35} bipolar format={value => signed(Number(value.toFixed(2)), 'oct')} description="Octaves the filter envelope moves the cutoff" onChange={value => setFilter({ envAmount: value })} />
-            <Knob size={52} label="Key track" value={patch.filter.keyTrack} min={synthLimits.keyTrack.min} max={synthLimits.keyTrack.max} step={synthLimits.keyTrack.step} reset={0.3} format={percent} description="How much the cutoff follows the key: one is an octave per octave" onChange={value => setFilter({ keyTrack: value })} />
-            <Knob size={52} label="Drive" value={patch.filter.drive} min={synthLimits.drive.min} max={synthLimits.drive.max} step={synthLimits.drive.step} reset={0} format={percent} description="How hard the filter is pushed: the ladder hears it as saturation, the linear models are compensated so it is character rather than level" onChange={value => setFilter({ drive: value })} />
+          <div className="synth-knobs dense">
+            <Knob size={44} label="Cutoff" value={cutoffPosition(patch.filter.cutoff)} min={0} max={1} step={0.001} reset={cutoffPosition(3200)} format={value => formatHz(cutoffHz(value))} announced={{ min: synthLimits.cutoff.min, max: synthLimits.cutoff.max, now: Math.round(patch.filter.cutoff) }} onChange={value => setFilter({ cutoff: Math.round(cutoffHz(value)) })} />
+            <Knob size={44} label="Resonance" value={patch.filter.resonance} min={synthLimits.resonance.min} max={synthLimits.resonance.max} step={synthLimits.resonance.step} reset={0.15} format={percent} onChange={value => setFilter({ resonance: value })} />
+            <Knob size={44} label="Env amount" value={patch.filter.envAmount} min={synthLimits.envAmount.min} max={synthLimits.envAmount.max} step={synthLimits.envAmount.step} reset={0.35} bipolar format={value => signed(Number(value.toFixed(2)), 'oct')} description="Octaves the filter envelope moves the cutoff" onChange={value => setFilter({ envAmount: value })} />
+            <Knob size={44} label="Key track" value={patch.filter.keyTrack} min={synthLimits.keyTrack.min} max={synthLimits.keyTrack.max} step={synthLimits.keyTrack.step} reset={0.3} format={percent} description="How much the cutoff follows the key: one is an octave per octave" onChange={value => setFilter({ keyTrack: value })} />
+            <Knob size={44} label="Drive" value={patch.filter.drive} min={synthLimits.drive.min} max={synthLimits.drive.max} step={synthLimits.drive.step} reset={0} format={percent} description="How hard the filter is pushed: the ladder hears it as saturation, the linear models are compensated so it is character rather than level" onChange={value => setFilter({ drive: value })} />
           </div>
           <p className="panel-note">{patch.filter.kind === 'ladder'
             ? 'Four one-poles in a ladder, saturated at the input and run at twice the rate: the peak an analog filter makes when it is pushed. Drive is what pushes it.'
@@ -516,7 +585,7 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
               onClick={() => setMods(patch.mods.filter((_, at) => at !== index))}
             ><Trash2 size={13} /></button>
           </div>)}
-        </div> : <p className="panel-note">No routes. A route sends an LFO, an envelope, velocity, the key, the wheel, aftertouch or a macro to one of the patch\u2019s own parameters.</p>}
+        </div> : <p className="panel-note">No routes. A route sends an LFO, an envelope, velocity, the key, the wheel, aftertouch or a macro to one of the patch’s own parameters.</p>}
       </section>
 
       <section className="synth-section" aria-label="Performance macros">
@@ -597,7 +666,7 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
           <div className="synth-section-head"><h3>Transport</h3><span className="synth-figures mono">{peakLabel(status.peakDb)}</span></div>
           <div className="synth-run-row">
             <button type="button" className="page-button" onClick={() => void synth.start()} disabled={synth.busy || run}><Circle size={13} aria-hidden="true" />Start output</button>
-            <button type="button" className="page-button ghost" onClick={() => void synth.stop()} disabled={!run}><Square size={13} aria-hidden="true" />Stop</button>
+            <button type="button" className="page-button" onClick={() => void synth.stop()} disabled={!run}><Square size={13} aria-hidden="true" />Stop</button>
           </div>
           <div className="synth-run-row">
             <button
@@ -653,6 +722,35 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
           <p className="panel-note">A take keeps the notes it heard and the patch it heard them with; a bounce renders them through the rack offline, so it is the same every time.</p>
         </section>
 
+        <section className="synth-section" aria-label="MPE settings">
+          <div className="synth-section-head">
+            <h3>MPE zones</h3>
+            <span className="synth-figures mono">{(patches.mpe.lowerMembers || patches.mpe.upperMembers)
+              ? `${patches.mpe.lowerMembers} lower · ${patches.mpe.upperMembers} upper`
+              : 'channel expression'}</span>
+          </div>
+          <div className="synth-entries">
+            <label className="synth-entry"><span>Lower members</span><input aria-label="Lower MPE member channels" type="number" min={0} max={patches.mpe.upperMembers ? 14 - patches.mpe.upperMembers : 15} value={patches.mpe.lowerMembers} onChange={event => {
+              const limit = patches.mpe.upperMembers ? 14 - patches.mpe.upperMembers : 15;
+              void synth.setMpe({ ...patches.mpe, lowerMembers: Math.max(0, Math.min(limit, Math.floor(Number(event.target.value) || 0))) });
+            }} /></label>
+            <label className="synth-entry"><span>Upper members</span><input aria-label="Upper MPE member channels" type="number" min={0} max={patches.mpe.lowerMembers ? 14 - patches.mpe.lowerMembers : 15} value={patches.mpe.upperMembers} onChange={event => {
+              const limit = patches.mpe.lowerMembers ? 14 - patches.mpe.lowerMembers : 15;
+              void synth.setMpe({ ...patches.mpe, upperMembers: Math.max(0, Math.min(limit, Math.floor(Number(event.target.value) || 0))) });
+            }} /></label>
+            <label className="synth-entry"><span>Member bend ± st</span><input aria-label="MPE member bend range" type="number" min={0} max={48} value={patches.mpe.memberBend} onChange={event => void synth.setMpe({ ...patches.mpe, memberBend: Math.max(0, Math.min(48, Math.floor(Number(event.target.value) || 0))) })} /></label>
+            <label className="synth-entry"><span>Master bend ± st</span><input aria-label="MPE master bend range" type="number" min={0} max={48} value={patches.mpe.masterBend} onChange={event => void synth.setMpe({ ...patches.mpe, masterBend: Math.max(0, Math.min(48, Math.floor(Number(event.target.value) || 0))) })} /></label>
+          </div>
+          <div className="mpe-map" aria-hidden="true">
+            {Array.from({ length: 16 }, (_, index) => {
+              const channel = index + 1;
+              const zone = mpeZone(channel, patches.mpe.lowerMembers, patches.mpe.upperMembers);
+              return <span key={channel} className={zone} title={`Channel ${channel}${zone ? ` · ${zone}` : ' · unused'}`}>{channel}</span>;
+            })}
+          </div>
+          <p className="panel-note">Zero disables a zone. Lower uses channel 1 as master; upper uses channel 16. Route Pressure and MPE timbre in the modulation matrix. Changing zones releases held notes.</p>
+        </section>
+
         <section className="synth-section" aria-label="Tuning">
           <div className="synth-section-head">
             <h3>Tuning</h3>
@@ -674,7 +772,9 @@ export function SynthPage({ synth, libraryRoot, chain, onOpenProcessors, onOpenE
               <option value="">{patch.tuning.length ? 'Custom tuning' : 'Equal temperament'}</option>
               {synth.scales.map(scale => <option key={scale.name} value={scale.name}>{scale.name}</option>)}
             </select>
-            <button type="button" className="page-button ghost" onClick={() => synth.edit({ tuning: [] })}>Equal temperament</button>
+            {/* The picker already names the tuning in hand, so the way back to equal
+                temperament is only offered while the patch is off it. */}
+            {tuning.off > 0 && <button type="button" className="page-button ghost" onClick={() => synth.edit({ tuning: [] })}>Equal temperament</button>}
             <button
               type="button"
               className="page-button ghost"

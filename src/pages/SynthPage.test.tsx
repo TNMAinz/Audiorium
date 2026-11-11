@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { defaultChain, defaultSynth, idleSynthStatus } from '../model';
+import { defaultChain, defaultMpe, defaultSynth, emptyPackCatalogue, idleSynthStatus } from '../model';
 import type { useSynth } from '../useSynth';
 import { SynthPage } from './SynthPage';
 
@@ -17,9 +17,10 @@ function stub(over: Partial<Synth> = {}): Synth {
       presets: [
         { id: 'builtin:init', name: 'Init saw', builtin: true },
         { id: 'builtin:pad', name: 'Warm pad', builtin: true },
-      ],
-      tables: ['Basic', 'Formant', 'Bell', 'Vocal'],
+      ],    tables: ['Basic', 'Formant', 'Bell', 'Vocal'],
+    mpe: defaultMpe,
     },
+    catalogue: emptyPackCatalogue,
     status: idleSynthStatus,
     held: new Set<number>(),
     error: '',
@@ -43,6 +44,7 @@ function stub(over: Partial<Synth> = {}): Synth {
     refreshDevices: async () => {},
     openDevice: async () => {},
     closeDevice: async () => {},
+    setMpe: async () => {},
     tableShape: async () => [],
     scales: [
       { name: 'Equal', cents: new Array(128).fill(0) },
@@ -74,12 +76,15 @@ describe('synth page', () => {
     expect(markup).toContain('Patch book');
     expect(markup).toContain('Init saw');
     expect(markup).toContain('Warm pad');
-    // Every dialog is a dialog: the faceplate is not one.
-    expect((markup.match(/<dialog/g) ?? []).length).toBe(6);
-    // The keyboard is drawn on the page, three octaves from C3 to C6.
+    // Every dialog is a dialog: the faceplate is not one. Six panels hold the
+    // instrument's controls, and the wavetable editor has a seventh of its own.
+    expect((markup.match(/<dialog/g) ?? []).length).toBe(7);
+    // The keyboard is drawn on the page over the two octaves the QWERTY row plays,
+    // from C3 to the C above it: nothing on the bed is out of reach of the letters.
     expect(markup).toContain('aria-label="Keyboard"');
     expect(markup).toContain('aria-label="C3"');
-    expect(markup).toContain('aria-label="C6"');
+    expect(markup).toContain('aria-label="C5"');
+    expect(markup).not.toContain('aria-label="C6"');
   });
 
   it('draws each envelope as one unbroken path from zero and back', () => {

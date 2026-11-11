@@ -1,8 +1,9 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  defaultSynth, emptySynthPatches, idleSynthStatus,
-  type SynthPatch, type SynthPatchList, type SynthScale, type SynthStatus,
+  defaultMpe, defaultSynth, emptyPackCatalogue, emptySynthPatches, idleSynthStatus,
+  type MpeSettings, type SynthPackCatalogue, type SynthPatch, type SynthPatchList, type SynthScale,
+  type SynthStatus,
 } from './model';
 
 /** A patch from an older build has fields this one added: they take their defaults. */
@@ -36,6 +37,34 @@ const normalizeList = (incoming: Partial<SynthPatchList> | null | undefined): Sy
     ? incoming.presets.filter(preset => preset && typeof preset.id === 'string')
     : [],
   tables: Array.isArray(incoming?.tables) ? incoming.tables.filter(name => typeof name === 'string') : [],
+  mpe: { ...defaultMpe, ...incoming?.mpe },
+});
+
+/** The packs a page browses: a malformed entry is dropped rather than drawn blank. */
+const normalizeCatalogue = (incoming: Partial<SynthPackCatalogue> | null | undefined): SynthPackCatalogue => ({
+  coverage: {
+    rows: Array.isArray(incoming?.coverage?.rows)
+      ? incoming.coverage.rows
+        .filter(row => row && typeof row.label === 'string' && Number.isFinite(row.covered) && Number.isFinite(row.total))
+        .map(row => ({ label: row.label, covered: row.covered, total: row.total }))
+      : [],
+    gridPacks: Number.isFinite(incoming?.coverage?.gridPacks) ? incoming?.coverage?.gridPacks ?? 0 : 0,
+    gridPatches: Number.isFinite(incoming?.coverage?.gridPatches) ? incoming?.coverage?.gridPatches ?? 0 : 0,
+  },
+  families: Array.isArray(incoming?.families) ? incoming.families.filter(name => typeof name === 'string') : [],
+  packs: Array.isArray(incoming?.packs)
+    ? incoming.packs
+      .filter(pack => pack && typeof pack.id === 'string' && typeof pack.name === 'string')
+      .map(pack => ({
+        id: pack.id,
+        name: pack.name,
+        family: typeof pack.family === 'string' ? pack.family : '',
+        blurb: typeof pack.blurb === 'string' ? pack.blurb : '',
+        patches: Array.isArray(pack.patches)
+          ? pack.patches.filter(patch => patch && typeof patch.id === 'string' && typeof patch.name === 'string')
+          : [],
+      }))
+    : [],
 });
 
 const normalizeStatus = (incoming: Partial<SynthStatus> | null | undefined): SynthStatus => ({
@@ -86,6 +115,7 @@ export function useSynth(suspended = false, reducedMotion = false, output = '') 
   const [bounced, setBounced] = useState('');
   const [devices, setDevices] = useState<string[]>([]);
   const [scales, setScales] = useState<SynthScale[]>([]);
+  const [catalogue, setCatalogue] = useState<SynthPackCatalogue>(emptyPackCatalogue);
   const [deviceError, setDeviceError] = useState('');
   // A drag sends one call per pointer move; a slow earlier reply must not land
   // after a newer edit and snap a knob back to the old value.
@@ -299,6 +329,15 @@ export function useSynth(suspended = false, reducedMotion = false, output = '') 
     }
   }, [native]);
 
+  const setMpe = useCallback(async (settings: MpeSettings) => {
+    if (!native) return;
+    try {
+      const list = normalizeList(await invoke<SynthPatchList>('synth_set_mpe', { settings }));
+      adopt(list);
+      setDeviceError('');
+    } catch (reason) { setDeviceError(String(reason)); }
+  }, [native, adopt]);
+
   const closeDevice = useCallback(async () => {
     if (!native) return;
     try {
@@ -306,6 +345,18 @@ export function useSynth(suspended = false, reducedMotion = false, output = '') 
     } catch (reason) {
       setDeviceError(String(reason));
     }
+  }, [native]);
+
+  /// The factory packs. They ship inside the engine, so they are read once when the
+  /// page opens rather than on every patch edit — the catalogue cannot change while
+  /// the app runs, and eight hundred patch names do not belong in a knob's reply.
+  useEffect(() => {
+    if (!native) return;
+    let active = true;
+    invoke<Partial<SynthPackCatalogue>>('synth_packs')
+      .then(found => { if (active) setCatalogue(normalizeCatalogue(found)); })
+      .catch(() => { if (active) setCatalogue(emptyPackCatalogue); });
+    return () => { active = false; };
   }, [native]);
 
   /// One cycle of a table at the patch's morph, for the display. The page asks
@@ -371,10 +422,10 @@ export function useSynth(suspended = false, reducedMotion = false, output = '') 
 
   return {
     native, patch, patches, status, held, error, busy, bounced,
-    devices, deviceError, tableShape, scales, chooseTable, chooseScale,
+    devices, deviceError, tableShape, scales, catalogue, chooseTable, chooseScale,
     apply, edit, noteOn, noteOff, allNotesOff, bend,
     start, stop, record, bounce,
     applyPreset, savePreset, deletePreset,
-    refreshDevices, openDevice, closeDevice,
+    refreshDevices, openDevice, closeDevice, setMpe,
   };
 }

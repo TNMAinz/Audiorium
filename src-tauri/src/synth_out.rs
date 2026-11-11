@@ -127,6 +127,7 @@ pub struct PatchList {
     /// The tables an oscillator can be set to, in the order the engine indexes
     /// them: the page names them instead of printing an index.
     pub tables: Vec<String>,
+    pub mpe: crate::midi::MpeConfig,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -146,6 +147,8 @@ struct PatchBook {
     active: Option<String>,
     #[serde(default)]
     saved: Vec<SavedPatch>,
+    #[serde(default)]
+    mpe: crate::midi::MpeConfig,
 }
 
 impl Default for PatchBook {
@@ -154,6 +157,7 @@ impl Default for PatchBook {
             patch: SynthConfig::default(),
             active: Some("builtin:init".into()),
             saved: Vec::new(),
+            mpe: crate::midi::MpeConfig::default(),
         }
     }
 }
@@ -241,6 +245,7 @@ pub struct SynthState {
     spatial: Arc<Mutex<SpatialConfig>>,
     store: BookStore,
     midi: Mutex<crate::midi::Link>,
+    mpe: Arc<Mutex<crate::midi::MpeConfig>>,
     /// The endpoint the output was opened on, as a device id; empty means Windows'
     /// default. The Devices page names one output for the app, so the instrument
     /// plays to the same one the player does.
@@ -257,15 +262,14 @@ fn tables_path() -> Option<PathBuf> {
     patch_path().map(|path| path.with_file_name("tables.json"))
 }
 
-fn write_tables() {
-    if let Some(path) = tables_path() {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Err(error) = fs::write(&path, synth::user_tables_json()) {
-            eprintln!("AUDIORIUM: the imported tables were not saved: {error}");
-        }
+fn write_tables(contents: &str) -> Result<(), String> {
+    let path = tables_path().ok_or("No directory is available for wavetable storage.")?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(fail)?;
     }
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, contents).map_err(fail)?;
+    fs::rename(&temporary, &path).map_err(fail)
 }
 
 /// Puts the user's tables back at launch. A file that is absent or unreadable is
@@ -282,11 +286,13 @@ impl SynthState {
     pub fn new(chain: Arc<ChainState>, spatial: Arc<Mutex<SpatialConfig>>) -> Arc<Self> {
         read_tables();
         let path = patch_path();
-        let book = path
+        let mut book = path
             .as_deref()
             .and_then(|path| fs::read_to_string(path).ok())
             .and_then(|text| serde_json::from_str::<PatchBook>(&text).ok())
             .unwrap_or_default();
+        if book.mpe.validate().is_err() { book.mpe = crate::midi::MpeConfig::default(); }
+        let mpe = Arc::new(Mutex::new(book.mpe));
         let store = path.map(BookStore::at).unwrap_or_else(BookStore::off);
         Arc::new(Self {
             book: Mutex::new(book),
@@ -300,6 +306,7 @@ impl SynthState {
             spatial,
             store,
             midi: Mutex::new(crate::midi::Link::default()),
+            mpe,
             device: Mutex::new(String::new()),
         })
     }
@@ -328,6 +335,7 @@ impl SynthState {
             active: book.active,
             presets,
             tables: synth::table_names().into_iter().map(String::from).collect(),
+            mpe: book.mpe,
         }
     }
 
@@ -483,17 +491,7 @@ fn run_stream(state: Arc<SynthState>, ready: mpsc::SyncSender<Result<String, Str
                 }
             }
         }
-        for event in queued {
-            match event {
-                Event::NoteOn { note, velocity } => synth.note_on(note, velocity),
-                Event::NoteOff { note } => synth.note_off(note),
-                Event::AllNotesOff => synth.all_notes_off(),
-                Event::Bend(value) => synth.set_bend(value),
-                Event::ModWheel(value) => synth.set_mod(value),
-                Event::NoteBend { note, semitones } => synth.note_bend(note, semitones),
-                Event::Pressure { note, amount } => synth.set_pressure(note, amount),
-            }
-        }
+        for event in queued { synth.apply_event(event); }
 
         for slot in bytes[..available * FRAME_BYTES].chunks_exact_mut(FRAME_BYTES) {
             let voice = synth.frame(&config);
@@ -553,6 +551,14 @@ pub fn synth_patch(state: tauri::State<'_, Arc<SynthState>>) -> PatchList {
     state.list()
 }
 
+/// The factory packs. They are built from the engine's own seeds rather than read
+/// from a file, so the catalogue a page browses cannot drift from the patches the
+/// engine plays: an id it shows is an id `synth_apply_preset` resolves.
+#[tauri::command]
+pub fn synth_packs() -> crate::packs::Catalogue {
+    crate::packs::catalogue()
+}
+
 #[tauri::command]
 pub fn set_synth(
     state: tauri::State<'_, Arc<SynthState>>,
@@ -581,14 +587,18 @@ pub fn synth_apply_preset(
         .map(|(_, _, patch)| patch);
     let patch = match builtin {
         Some(patch) => patch,
-        None => {
-            let book = state.book.lock().map_err(fail)?;
-            book.saved
-                .iter()
-                .find(|saved| saved.id == id)
-                .map(|saved| saved.patch.clone())
-                .ok_or("That patch is no longer saved.")?
-        }
+        // A pack patch is built from its seed by the same builder that named it.
+        None => match crate::packs::find(&id) {
+            Some(patch) => patch,
+            None => {
+                let book = state.book.lock().map_err(fail)?;
+                book.saved
+                    .iter()
+                    .find(|saved| saved.id == id)
+                    .map(|saved| saved.patch.clone())
+                    .ok_or("That patch is no longer saved.")?
+            }
+        },
     };
     patch.validate()?;
     {
@@ -947,7 +957,7 @@ fn frames_from(samples: &[f32]) -> Vec<Vec<f32>> {
                     a + (b - a) * mix
                 })
                 .collect();
-            synth::analyze_cycle(&cycle, 128)
+            cycle
         })
         .collect()
 }
@@ -988,8 +998,7 @@ pub fn synth_import_table(
 ) -> Result<PatchList, String> {
     let (found, frames) = load_table(Path::new(&path))?;
     let name = name.filter(|name| !name.trim().is_empty()).unwrap_or(found);
-    synth::add_table(name, frames)?;
-    write_tables();
+    synth::add_sample_table_and_persist(name, frames, write_tables)?;
     Ok(state.list())
 }
 
@@ -1017,6 +1026,18 @@ pub async fn synth_choose_table(
     synth_import_table(state, path, None).map(Some)
 }
 
+/// Retrieve the cycles of an imported table without altering it.
+#[tauri::command]
+pub fn synth_editable_table(table: usize) -> Result<Vec<Vec<f32>>, String> {
+    synth::editable_table(table)
+}
+
+/// Apply edited cycles and persist them for the next launch.
+#[tauri::command]
+pub fn synth_save_table(table: usize, frames: Vec<Vec<f32>>) -> Result<(), String> {
+    synth::edit_table_and_persist(table, frames, write_tables)
+}
+
 #[tauri::command]
 pub fn synth_midi_devices() -> Result<Vec<String>, String> {
     crate::midi::devices()
@@ -1033,12 +1054,29 @@ pub fn synth_midi_open(
     state: tauri::State<'_, Arc<SynthState>>,
     port: usize,
 ) -> Result<SynthStatus, String> {
-    let link = crate::midi::open(port, state.events.clone())?;
+    let link = crate::midi::open(port, state.events.clone(), state.mpe.clone())?;
     {
         let mut slot = state.midi.lock().map_err(fail)?;
         *slot = link;
     }
     Ok(snapshot(&state))
+}
+
+#[tauri::command]
+pub fn synth_set_mpe(state: tauri::State<'_, Arc<SynthState>>, settings: crate::midi::MpeConfig) -> Result<PatchList, String> {
+    settings.validate()?;
+    {
+        // MIDI callbacks take the queue before reading settings, so changing both
+        // under that lock makes the release precede every event in the new zones.
+        let mut queue = state.events.lock().map_err(fail)?;
+        let mut book = state.book.lock().map_err(fail)?;
+        let mut current = state.mpe.lock().map_err(fail)?;
+        *current = settings;
+        book.mpe = settings;
+        state.store.save(book.clone());
+        queue.push(Event::AllNotesOff);
+    }
+    Ok(state.list())
 }
 
 #[tauri::command]
@@ -1073,10 +1111,12 @@ pub fn synth_bounce(
     // tail instead of a cut.
     events.push((end, Event::AllNotesOff));
     let tail = (patch.amp.release.max(patch.filter_env.release) * RATE) as u64;
-    let frames = (end + tail + RATE as u64 / 4) as usize;
+    let chain_config = state.chain.effective();
+    let effects_tail = crate::fx::tail_frames(&chain_config.effects) as u64;
+    let room_tail = if chain_config.reverb.enabled { (crate::reverb::reverb_time(chain_config.reverb.decay) * RATE) as u64 } else { 0 };
+    let frames = (end + tail + effects_tail + room_tail + RATE as u64 / 4) as usize;
     let voice_frames = synth::render_events(&patch, &events, frames);
 
-    let chain_config = state.chain.effective();
     let mut chain = Chain::new(SpatialConfig::default(), chain_config.clone());
     let rendered: Vec<[f32; 2]> = voice_frames
         .into_iter()
@@ -1161,11 +1201,13 @@ mod tests {
         let mut book = PatchBook::default();
         book.patch.filter.cutoff = 880.0;
         book.active = Some("builtin:pad".into());
+        book.mpe = crate::midi::MpeConfig { lower_members: 7, upper_members: 4, member_bend: 24, master_bend: 3 };
         write_book(&path, &book).expect("the patch is written");
         let text = fs::read_to_string(&path).expect("the file is there");
         let loaded: PatchBook = serde_json::from_str(&text).expect("the file is read");
         assert_eq!(loaded.patch, book.patch);
         assert_eq!(loaded.active.as_deref(), Some("builtin:pad"));
+        assert_eq!(loaded.mpe, book.mpe);
         let _ = fs::remove_file(&path);
     }
 
@@ -1249,21 +1291,20 @@ mod import_tests {
     fn a_file_of_one_cycle_is_one_frame() {
         let frames = frames_from(&cycle(synth::TABLE_SAMPLES, 1.0, 0.9));
         assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].len(), 128);
-        assert!(
-            frames[0][0] > 0.5,
-            "the cycle's fundamental read {}",
-            frames[0][0]
-        );
-        // A sine has nothing above its own harmonic, so every higher level is small.
-        for (index, level) in frames[0].iter().enumerate().skip(1) {
-            assert!(level.is_finite());
-            assert!(
-                *level < frames[0][0],
-                "harmonic {} competes with the fundamental",
-                index + 1
-            );
-        }
+        assert_eq!(frames[0].len(), synth::TABLE_SAMPLES);
+        let levels = synth::analyze_cycle(&frames[0], 128);
+        assert!(levels[0] > 0.5);
+        assert!(levels.iter().skip(1).all(|level| *level < levels[0]));
+    }
+
+    #[test]
+    fn import_retains_phase_for_the_editor() {
+        let samples: Vec<f32> = (0..synth::TABLE_SAMPLES)
+            .map(|i| (std::f32::consts::TAU * i as f32 / synth::TABLE_SAMPLES as f32).cos())
+            .collect();
+        let frames = frames_from(&samples);
+        assert!((frames[0][0] - 1.0).abs() < 0.001);
+        assert!(frames[0][synth::TABLE_SAMPLES / 4].abs() < 0.001);
     }
 
     #[test]
@@ -1272,23 +1313,20 @@ mod import_tests {
         assert_eq!(frames.len(), 2);
         assert!(frames
             .iter()
-            .all(|frame| frame.len() == 128 && frame.iter().all(|level| level.is_finite())));
-        // Both frames are the same sine, so they analyse to the same harmonics.
-        assert!(frames[0][0] > 0.5, "the first cycle read {}", frames[0][0]);
-        assert!((frames[0][0] - frames[1][0]).abs() < 0.01);
+            .all(|frame| frame.len() == synth::TABLE_SAMPLES && frame.iter().all(|sample| sample.is_finite())));
+        let first = synth::analyze_cycle(&frames[0], 1)[0];
+        let second = synth::analyze_cycle(&frames[1], 1)[0];
+        assert!(first > 0.5);
+        assert!((first - second).abs() < 0.01);
     }
 
     #[test]
     fn a_file_shorter_than_a_frame_is_stretched_into_one() {
         let frames = frames_from(&cycle(600, 1.0, 0.9));
         assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].len(), 128);
-        assert!(frames[0].iter().all(|level| level.is_finite()));
-        assert!(
-            frames[0][0] > 0.5,
-            "the stretched cycle's fundamental read {}",
-            frames[0][0]
-        );
+        assert_eq!(frames[0].len(), synth::TABLE_SAMPLES);
+        assert!(frames[0].iter().all(|sample| sample.is_finite()));
+        assert!(synth::analyze_cycle(&frames[0], 1)[0] > 0.5);
     }
 
     #[test]
@@ -1299,12 +1337,8 @@ mod import_tests {
         let (name, frames) = load_table(&path).expect("the wav is a table");
         assert_eq!(name, format!("audiorium-table-{stamp}"));
         assert_eq!(frames.len(), 2, "two cycles are two frames");
-        assert!(frames.iter().all(|frame| frame.len() == 128));
-        assert!(
-            frames[0][0] > 0.3,
-            "the file's fundamental read {}",
-            frames[0][0]
-        );
+        assert!(frames.iter().all(|frame| frame.len() == synth::TABLE_SAMPLES));
+        assert!(synth::analyze_cycle(&frames[0], 1)[0] > 0.3);
         let _ = fs::remove_file(&path);
     }
 

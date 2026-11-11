@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   defaultChain, defaultEq, emptyPresets, eqLimits, idleEqResponse, idleMeters, isStageOrder,
   type ChainMeters, type ChainSettings, type CompressorSettings, type EqFilter, type EqPresetList,
-  type EqResponse, type EqSettings, type LimiterSettings, type PannerSettings,
+  type EffectSettings, type EqResponse, type EqSettings, type LimiterSettings, type PannerSettings,
   type ReverbSettings, type SaturatorSettings, type StageId, type StereoMode,
 } from './model';
 
@@ -14,6 +14,9 @@ const normalizeChain = (incoming: Partial<ChainSettings> | null | undefined): Ch
   ...incoming,
   order: isStageOrder(incoming?.order) ? incoming.order : defaultChain.order,
   stereoMode: incoming?.stereoMode === 'ms' ? 'ms' : 'lr',
+  effects: Array.isArray(incoming?.effects) && incoming.effects.length === defaultChain.effects.length
+    ? incoming.effects.map((effect, index) => ({ ...defaultChain.effects[index], ...effect }))
+    : defaultChain.effects,
 });
 
 /** An equaliser edit and the patch list it produced, as the engine returns them. */
@@ -169,6 +172,14 @@ export function useChain(suspended = false) {
     }));
   }, [chain.saturator, send]);
 
+  const setEffect = useCallback((index: number, patch: Partial<EffectSettings>) => {
+    const current = chain.effects[index];
+    if (!current) return;
+    const next = { ...current, ...patch };
+    setChain(previous => ({ ...previous, effects: previous.effects.map((effect, at) => at === index ? next : effect) }));
+    void send(() => invoke<ChainSettings>('set_effect', { index, effect: next }));
+  }, [chain.effects, send]);
+
   /** The rack order. The engine refuses a list that repeats or drops a stage. */
   const setOrder = useCallback((order: StageId[]) => {
     setChain(current => ({ ...current, order }));
@@ -299,7 +310,7 @@ export function useChain(suspended = false) {
 
   return {
     native, chain, meters, eqCurve, error, presets, patchError,
-    setPanner, setReverb, setLimiter, setCompressor, setSaturator, setOrder, setStereoMode, randomizeReverb,
+    setPanner, setReverb, setLimiter, setCompressor, setSaturator, setEffect, setOrder, setStereoMode, randomizeReverb,
     setEq, updateFilter, addFilter, removeFilter, resetEq, matchHeadroom,
     applyPreset, renamePreset, deletePreset,
   };

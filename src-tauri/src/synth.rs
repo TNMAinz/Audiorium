@@ -150,6 +150,8 @@ pub enum ModSource {
     Wheel,
     /// Per-note aftertouch, from an MPE controller or a channel's pressure.
     Pressure,
+    /// Per-note MPE slide (CC74).
+    Timbre,
     Macro1,
     Macro2,
     Macro3,
@@ -714,6 +716,7 @@ struct Sources {
     key: f32,
     wheel: f32,
     pressure: f32,
+    timbre: f32,
     macros: [f32; 4],
 }
 
@@ -728,6 +731,7 @@ impl Sources {
             ModSource::Key => self.key,
             ModSource::Wheel => self.wheel,
             ModSource::Pressure => self.pressure,
+            ModSource::Timbre => self.timbre,
             ModSource::Macro1 => self.macros[0],
             ModSource::Macro2 => self.macros[1],
             ModSource::Macro3 => self.macros[2],
@@ -797,6 +801,31 @@ impl Frame {
         for _ in 1..TABLE_LEVELS {
             samples = decimate(&levels[levels.len() - 1]);
             levels.push(standardise(&samples));
+        }
+        Self { levels }
+    }
+
+    /// Reconstruct only the supported harmonics, retaining their phases.
+    fn from_samples(samples: &[f32]) -> Self {
+        let mut reconstructed = vec![0.0f32; TABLE_SIZE];
+        let scale = 2.0 / samples.len() as f64;
+        for harmonic in 1..=128 {
+            let mut sine = 0.0f64;
+            let mut cosine = 0.0f64;
+            for (index, sample) in samples.iter().enumerate() {
+                let phase = std::f64::consts::TAU * harmonic as f64 * index as f64 / samples.len() as f64;
+                sine += *sample as f64 * phase.sin();
+                cosine += *sample as f64 * phase.cos();
+            }
+            for (index, sample) in reconstructed.iter_mut().enumerate() {
+                let phase = std::f64::consts::TAU * harmonic as f64 * index as f64 / TABLE_SIZE as f64;
+                *sample += ((sine * phase.sin() + cosine * phase.cos()) * scale) as f32;
+            }
+        }
+        let mut levels = Vec::with_capacity(TABLE_LEVELS);
+        levels.push(standardise(&reconstructed));
+        for _ in 1..TABLE_LEVELS {
+            levels.push(standardise(&decimate(&levels[levels.len() - 1])));
         }
         Self { levels }
     }
@@ -989,6 +1018,12 @@ fn registry() -> &'static std::sync::RwLock<std::sync::Arc<Vec<Table>>> {
     REGISTRY.get_or_init(|| std::sync::RwLock::new(std::sync::Arc::new(build_tables())))
 }
 
+// Table writers serialize disk commits without holding the registry lock during I/O.
+fn table_writer() -> &'static std::sync::Mutex<()> {
+    static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &WRITER
+}
+
 fn snapshot() -> std::sync::Arc<Vec<Table>> {
     match registry().read() {
         Ok(tables) => std::sync::Arc::clone(&tables),
@@ -1063,6 +1098,7 @@ pub fn add_table(name: String, frames: Vec<Vec<f32>>) -> Result<usize, String> {
         name: name.clone(),
         frames: frames.iter().map(|frame| Frame::build(frame)).collect(),
     };
+    let _writer = table_writer().lock().map_err(|_| "The table writer is locked.".to_string())?;
     let mut registry = registry().write().map_err(|_| "The table list is locked.".to_string())?;
     let mut tables = (**registry).clone();
     // Importing the same name again is an update, not a second copy: a patch that
@@ -1084,25 +1120,96 @@ pub fn add_table(name: String, frames: Vec<Vec<f32>>) -> Result<usize, String> {
     Ok(registry.len() - 1)
 }
 
-/// The user's tables, as the form the patch file keeps: their harmonic levels, not
-/// their samples, so the mip chains are rebuilt at the next launch.
-pub fn user_tables_json() -> String {
+/// Return the individual cycles of an imported table for editing.
+pub fn editable_table(table: usize) -> Result<Vec<Vec<f32>>, String> {
+    if table < TABLES {
+        return Err("Only imported tables can be edited.".into());
+    }
     let tables = snapshot();
+    let table = tables.get(table).ok_or("That table is unavailable.")?;
+    Ok(table.frames.iter().map(|frame| frame.levels[0].clone()).collect())
+}
+
+fn build_sample_frames(frames: &[Vec<f32>]) -> Result<Vec<Frame>, String> {
+    if frames.is_empty() || frames.len() > FRAMES {
+        return Err("An imported table must have one to eight frames.".into());
+    }
+    if frames.iter().any(|frame| frame.len() != TABLE_SIZE || frame.iter().any(|sample| !sample.is_finite() || sample.abs() > 1.0)) {
+        return Err("Each frame must contain 2048 finite samples between -1 and 1.".into());
+    }
+    Ok(frames.iter().map(|frame| Frame::from_samples(frame)).collect())
+}
+
+/// Replace an imported table without changing its index; publish only after saving.
+pub fn edit_table_and_persist(
+    table: usize,
+    frames: Vec<Vec<f32>>,
+    persist: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    if table < TABLES {
+        return Err("Only imported tables can be edited.".into());
+    }
+    let built = build_sample_frames(&frames)?;
+    let _writer = table_writer().lock().map_err(|_| "The table writer is locked.".to_string())?;
+    let mut tables = (*snapshot()).clone();
+    let target = tables.get_mut(table).ok_or("That table is unavailable.")?;
+    target.frames = built;
+    persist(&tables_json(&tables))?;
+    *registry().write().map_err(|_| "The table list is locked.".to_string())? = std::sync::Arc::new(tables);
+    Ok(())
+}
+
+#[cfg(test)]
+pub fn edit_table(table: usize, frames: Vec<Vec<f32>>) -> Result<(), String> {
+    edit_table_and_persist(table, frames, |_| Ok(()))
+}
+
+/// Import or replace a table while preserving the source's spectral phase.
+pub fn add_sample_table_and_persist(
+    name: String,
+    frames: Vec<Vec<f32>>,
+    persist: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<usize, String> {
+    let built = build_sample_frames(&frames)?;
+    let _writer = table_writer().lock().map_err(|_| "The table writer is locked.".to_string())?;
+    let mut tables = (*snapshot()).clone();
+    let existing = tables.iter().enumerate().skip(TABLES).find(|(_, table)| table.name == name).map(|(index, _)| index);
+    let index = if let Some(index) = existing {
+        tables[index].frames = built;
+        index
+    } else {
+        if tables.len() >= 256 { return Err("The table limit has been reached.".into()); }
+        let index = tables.len();
+        tables.push(Table { name, frames: built });
+        index
+    };
+    persist(&tables_json(&tables))?;
+    *registry().write().map_err(|_| "The table list is locked.".to_string())? = std::sync::Arc::new(tables);
+    Ok(index)
+}
+
+pub fn add_sample_table(name: String, frames: Vec<Vec<f32>>) -> Result<usize, String> {
+    add_sample_table_and_persist(name, frames, |_| Ok(()))
+}
+
+/// Keep waveform samples for user tables so spectral phase survives a restart.
+fn tables_json(tables: &[Table]) -> String {
     let user: Vec<serde_json::Value> = tables
         .iter()
         .skip(TABLES)
         .map(|table| {
             serde_json::json!({
                 "name": table.name,
-                "frames": table
-                    .frames
-                    .iter()
-                    .map(|frame| analyze_cycle(&frame.levels[0], 128))
-                    .collect::<Vec<Vec<f32>>>(),
+                "samples": table.frames.iter().map(|frame| &frame.levels[0]).collect::<Vec<_>>(),
             })
         })
         .collect();
     serde_json::json!({ "tables": user }).to_string()
+}
+
+#[cfg(test)]
+pub fn user_tables_json() -> String {
+    tables_json(&snapshot())
 }
 
 /// Restores the user's tables from their stored harmonic levels and returns how many
@@ -1119,6 +1226,19 @@ pub fn restore_tables(json: &str) -> usize {
         let Some(name) = entry.get("name").and_then(|name| name.as_str()) else {
             continue;
         };
+        if let Some(samples) = entry.get("samples").and_then(|samples| samples.as_array()) {
+            let frames: Option<Vec<Vec<f32>>> = samples.iter().map(|frame| {
+                frame.as_array()?.iter().map(|value| value.as_f64().map(|n| n as f32)).collect()
+            }).collect();
+            if let Some(frames) = frames {
+                if frames.is_empty() || frames.len() > FRAMES || frames.iter().any(|frame| frame.len() != TABLE_SIZE || frame.iter().any(|sample| !sample.is_finite() || sample.abs() > 1.0)) {
+                    continue;
+                }
+                // Preserve original order and old saved-patch indices.
+                if add_sample_table(name.to_string(), frames).is_ok() { added += 1; }
+            }
+            continue;
+        }
         let Some(frames) = entry.get("frames").and_then(|frames| frames.as_array()) else {
             continue;
         };
@@ -1207,12 +1327,24 @@ pub enum Event {
     NoteBend { note: u8, semitones: f32 },
     /// One note's aftertouch, 0 to 1.
     Pressure { note: u8, amount: f32 },
+    MpeNoteOn { channel: u8, zone: u8, note: u8, velocity: f32, bend: f32, pressure: f32, timbre: f32 },
+    MpeNoteOff { channel: u8, note: u8 },
+    MpeBend { channel: u8, semitones: f32 },
+    MpePressure { channel: u8, amount: f32 },
+    MpeTimbre { channel: u8, amount: f32 },
+    MpeMasterBend { zone: u8, semitones: f32 },
+    MpeMasterPressure { zone: u8, amount: f32 },
+    MpeMasterTimbre { zone: u8, amount: f32 },
+    MpeMasterWheel { zone: u8, amount: f32 },
 }
 
 // ---------- voices ----------
 
 struct Voice {
     note: u8,
+    channel: Option<u8>,
+    zone: Option<u8>,
+    timbre: f32,
     velocity: f32,
     /// One phase per unison copy per oscillator. The copies drift apart because
     /// their steps differ, which is what makes a stack sound wide rather than loud.
@@ -1240,6 +1372,9 @@ impl Voice {
     fn new() -> Self {
         Self {
             note: 60,
+            channel: None,
+            zone: None,
+            timbre: 0.0,
             velocity: 0.0,
             phase: [[0.0; MAX_UNISON]; 2],
             sub_phase: 0.0,
@@ -1496,6 +1631,10 @@ pub struct Synth {
     lfo2_phase: f32,
     bend: f32,
     wheel: f32,
+    zone_bend: [f32; 2],
+    zone_pressure: [f32; 2],
+    zone_timbre: [f32; 2],
+    zone_wheel: [f32; 2],
     age: u64,
 }
 
@@ -1513,6 +1652,10 @@ impl Synth {
             lfo2_phase: 0.0,
             bend: 0.0,
             wheel: 1.0,
+            zone_bend: [0.0; 2],
+            zone_pressure: [0.0; 2],
+            zone_timbre: [0.0; 2],
+            zone_wheel: [1.0; 2],
             age: 0,
         }
     }
@@ -1522,13 +1665,17 @@ impl Synth {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: f32) {
+        self.start_note(note, velocity, None, None);
+    }
+
+    fn start_note(&mut self, note: u8, velocity: f32, channel: Option<u8>, zone: Option<u8>) {
         let note = note.min(127);
         // A repeated note retriggers the voice that already holds it rather than
         // stacking a second one, so holding a key twice is not twice as loud.
         let reuse = self
             .voices
             .iter()
-            .position(|voice| !voice.idle() && voice.note == note);
+            .position(|voice| !voice.idle() && voice.note == note && voice.channel == channel);
         let index = reuse.unwrap_or_else(|| {
             let free = self.voices.iter().position(Voice::idle);
             let oldest_release = self
@@ -1557,11 +1704,14 @@ impl Synth {
         self.age += 1;
         let age = self.age;
         self.voices[index].start(note, velocity, pan, age, from);
+        self.voices[index].channel = channel;
+        self.voices[index].zone = zone;
+        self.voices[index].timbre = 0.0;
     }
 
     pub fn note_off(&mut self, note: u8) {
         for voice in &mut self.voices {
-            if !voice.idle() && voice.note == note {
+            if !voice.idle() && voice.note == note && voice.channel.is_none() {
                 voice.stop();
             }
         }
@@ -1600,6 +1750,47 @@ impl Synth {
         }
     }
 
+    /// Apply the same event path for the live output and offline bounce.
+    pub fn apply_event(&mut self, event: Event) {
+        match event {
+            Event::NoteOn { note, velocity } => self.note_on(note, velocity),
+            Event::NoteOff { note } => self.note_off(note),
+            Event::AllNotesOff => { self.all_notes_off(); self.zone_bend = [0.0; 2]; self.zone_pressure = [0.0; 2]; self.zone_timbre = [0.0; 2]; self.zone_wheel = [1.0; 2]; }
+            Event::Bend(value) => self.set_bend(value),
+            Event::ModWheel(value) => self.set_mod(value),
+            Event::NoteBend { note, semitones } => self.note_bend(note, semitones),
+            Event::Pressure { note, amount } => self.set_pressure(note, amount),
+            Event::MpeNoteOn { channel, zone, note, velocity, bend, pressure, timbre } if channel < 16 && zone < 2 => {
+                for voice in &mut self.voices {
+                    if voice.channel == Some(channel) && !voice.idle() { voice.stop(); }
+                }
+                self.start_note(note, velocity, Some(channel), Some(zone));
+                if let Some(voice) = self.voices.iter_mut().filter(|voice| voice.channel == Some(channel) && voice.note == note).max_by_key(|voice| voice.age) {
+                    voice.bend = bend.clamp(-48.0, 48.0);
+                    voice.pressure = pressure.clamp(0.0, 1.0);
+                    voice.timbre = timbre.clamp(0.0, 1.0);
+                }
+            }
+            Event::MpeNoteOff { channel, note } => {
+                for voice in &mut self.voices { if voice.channel == Some(channel) && voice.note == note && !voice.idle() { voice.stop(); } }
+            }
+            Event::MpeBend { channel, semitones } => {
+                for voice in &mut self.voices { if voice.channel == Some(channel) && !voice.idle() && voice.amp.stage != Stage::Release { voice.bend = semitones.clamp(-48.0, 48.0); } }
+            }
+            Event::MpePressure { channel, amount } => {
+                for voice in &mut self.voices { if voice.channel == Some(channel) && !voice.idle() && voice.amp.stage != Stage::Release { voice.pressure = amount.clamp(0.0, 1.0); } }
+            }
+            Event::MpeTimbre { channel, amount } => {
+                for voice in &mut self.voices { if voice.channel == Some(channel) && !voice.idle() && voice.amp.stage != Stage::Release { voice.timbre = amount.clamp(0.0, 1.0); } }
+            }
+            Event::MpeMasterBend { zone, semitones } if zone < 2 => self.zone_bend[zone as usize] = semitones.clamp(-48.0, 48.0),
+            Event::MpeMasterPressure { zone, amount } if zone < 2 => self.zone_pressure[zone as usize] = amount.clamp(0.0, 1.0),
+            Event::MpeMasterTimbre { zone, amount } if zone < 2 => self.zone_timbre[zone as usize] = amount.clamp(0.0, 1.0),
+            Event::MpeMasterWheel { zone, amount } if zone < 2 => self.zone_wheel[zone as usize] = amount.clamp(0.0, 1.0),
+            _ => {}
+        }
+    }
+
     /// One stereo frame. The voices are summed, panned across two positions so a
     /// chord has width, and held at full scale: louder is the limiter's job.
     pub fn frame(&mut self, config: &SynthConfig) -> [f32; 2] {
@@ -1609,29 +1800,36 @@ impl Synth {
         self.lfo_phase = (self.lfo_phase + increment) % 1.0;
         let second = config.lfo2.rate.max(0.05) / RATE;
         self.lfo2_phase = (self.lfo2_phase + second) % 1.0;
-        let lfo1 = lfo_value(config.lfo.wave, self.lfo_phase) * self.wheel;
-        let lfo2 = lfo_value(config.lfo2.wave, self.lfo2_phase) * self.wheel;
+        let lfo1 = lfo_value(config.lfo.wave, self.lfo_phase);
+        let lfo2 = lfo_value(config.lfo2.wave, self.lfo2_phase);
         let shared = Sources {
-            lfo1,
-            lfo2,
+            lfo1: lfo1 * self.wheel,
+            lfo2: lfo2 * self.wheel,
             env1: 0.0,
             env2: 0.0,
             velocity: 1.0,
             key: 0.0,
             wheel: self.wheel,
             pressure: 0.0,
+            timbre: 0.0,
             macros: config.macros,
         };
         let mut left = 0.0;
         let mut right = 0.0;
         for voice in &mut self.voices {
+            let wheel = voice.zone.map(|zone| self.zone_wheel[zone as usize]).unwrap_or(self.wheel);
             let per_voice = Sources {
+                lfo1: lfo1 * wheel,
+                lfo2: lfo2 * wheel,
                 velocity: voice.velocity,
                 key: (voice.note as f32 - 60.0) / 36.0,
-                pressure: voice.pressure,
+                pressure: (voice.pressure + voice.zone.map(|zone| self.zone_pressure[zone as usize]).unwrap_or(0.0)).clamp(0.0, 1.0),
+                timbre: (voice.timbre + voice.zone.map(|zone| self.zone_timbre[zone as usize]).unwrap_or(0.0)).clamp(0.0, 1.0),
+                wheel,
                 ..shared
             };
-            let sample = voice.frame(config, per_voice, self.bend, &tables);
+            let bend = voice.zone.map(|zone| self.zone_bend[zone as usize]).unwrap_or(self.bend);
+            let sample = voice.frame(config, per_voice, bend, &tables);
             if sample[0] == 0.0 && sample[1] == 0.0 {
                 continue;
             }
@@ -1672,15 +1870,7 @@ pub fn render_events(
             if *at > frame as u64 {
                 break;
             }
-            match *event {
-                Event::NoteOn { note, velocity } => synth.note_on(note, velocity),
-                Event::NoteOff { note } => synth.note_off(note),
-                Event::AllNotesOff => synth.all_notes_off(),
-                Event::Bend(value) => synth.set_bend(value),
-                Event::ModWheel(value) => synth.set_mod(value),
-                Event::NoteBend { note, semitones } => synth.note_bend(note, semitones),
-                Event::Pressure { note, amount } => synth.set_pressure(note, amount),
-            }
+            synth.apply_event(*event);
             next += 1;
         }
         output.push(synth.frame(config));
@@ -2024,6 +2214,66 @@ mod tests {
         }
         (first * first + second * second - coefficient * first * second).max(0.0).sqrt()
             / samples.len() as f32
+    }
+
+    #[test]
+    fn mpe_keeps_same_pitch_notes_and_released_tails_separate_by_channel() {
+        let mut synth = Synth::new();
+        let note = |channel, note| Event::MpeNoteOn { channel, zone: 0, note, velocity: 1.0, bend: 0.0, pressure: 0.0, timbre: 0.0 };
+        synth.apply_event(note(1, 60));
+        synth.apply_event(note(2, 60));
+        synth.apply_event(Event::MpeBend { channel: 1, semitones: 12.0 });
+        synth.apply_event(Event::MpePressure { channel: 1, amount: 0.5 });
+        synth.apply_event(Event::MpeTimbre { channel: 1, amount: 0.7 });
+        let first = synth.voices.iter().find(|voice| voice.channel == Some(1)).unwrap();
+        let second = synth.voices.iter().find(|voice| voice.channel == Some(2)).unwrap();
+        assert_eq!((first.bend, first.pressure, first.timbre), (12.0, 0.5, 0.7));
+        assert_eq!((second.bend, second.pressure, second.timbre), (0.0, 0.0, 0.0));
+        synth.apply_event(Event::MpeNoteOff { channel: 1, note: 60 });
+        synth.apply_event(note(1, 62));
+        synth.apply_event(Event::MpeBend { channel: 1, semitones: -4.0 });
+        synth.apply_event(Event::MpePressure { channel: 1, amount: 0.9 });
+        let tail = synth.voices.iter().find(|voice| voice.channel == Some(1) && voice.note == 60).unwrap();
+        let held = synth.voices.iter().find(|voice| voice.channel == Some(1) && voice.note == 62).unwrap();
+        assert_eq!(tail.amp.stage, Stage::Release);
+        assert_eq!((tail.bend, tail.pressure), (12.0, 0.5));
+        assert_eq!((held.bend, held.pressure), (-4.0, 0.9));
+        assert_ne!(synth.voices.iter().find(|voice| voice.channel == Some(2)).unwrap().amp.stage, Stage::Release);
+    }
+
+    #[test]
+    fn mpe_expression_reaches_the_modulation_matrix_and_offline_render() {
+        let mut config = SynthConfig::default();
+        config.mods = vec![
+            Mod { source: ModSource::Pressure, target: ModTarget::Pitch, amount: 0.5, curve: ModCurve::Linear },
+            Mod { source: ModSource::Timbre, target: ModTarget::Cutoff, amount: 0.5, curve: ModCurve::Linear },
+        ];
+        let render = |pressure, timbre| render_events(&config, &[
+            (0, Event::MpeMasterPressure { zone: 0, amount: pressure }),
+            (0, Event::MpeNoteOn { channel: 1, zone: 0, note: 69, velocity: 1.0, bend: 0.0, pressure: 0.0, timbre }),
+        ], 4000);
+        let baseline = render(0.0, 0.0);
+        assert_ne!(baseline, render(1.0, 0.0));
+        assert_ne!(baseline, render(0.0, 1.0));
+        assert!(baseline.iter().flatten().any(|value| value.abs() > 0.001));
+    }
+
+    #[test]
+    fn mpe_zone_bend_and_lfo_wheel_are_not_affected_by_the_ordinary_keyboard() {
+        let mut config = SynthConfig::default();
+        config.lfo.target = LfoTarget::Pitch;
+        config.lfo.depth = 1.0;
+        let render = |global_wheel, global_bend, zone_wheel| {
+            render_events(&config, &[
+                (0, Event::ModWheel(global_wheel)),
+                (0, Event::Bend(global_bend)),
+                (0, Event::MpeMasterWheel { zone: 0, amount: zone_wheel }),
+                (0, Event::MpeNoteOn { channel: 1, zone: 0, note: 69, velocity: 1.0, bend: 0.0, pressure: 0.0, timbre: 0.0 }),
+            ], 4000)
+        };
+        let baseline = render(0.0, 0.0, 1.0);
+        assert_eq!(baseline, render(1.0, 2.0, 1.0));
+        assert_ne!(baseline, render(0.0, 0.0, 0.0));
     }
 
     #[test]
@@ -2616,6 +2866,36 @@ mod tests {
             "the drawn cycle has only {} values",
             distinct(&shape)
         );
+    }
+
+    #[test]
+    fn edited_table_preserves_phase_and_rejects_invalid_frames() {
+        let _guard = lock_tables();
+        let index = add_table(unique_name("Phase edit"), vec![one_harmonic(1)]).unwrap();
+        let cycle: Vec<f32> = (0..TABLE_SIZE).map(|i| (std::f32::consts::TAU * i as f32 / TABLE_SIZE as f32).cos()).collect();
+        edit_table(index, vec![cycle]).unwrap();
+        let before = table_shape(index as u8, 0.0, 256);
+        assert!(before[0] > 0.99, "cosine phase was lost");
+        let stored = user_tables_json();
+        restore_tables(&stored);
+        let after = table_shape(index as u8, 0.0, 256);
+        assert!(before.iter().zip(after).all(|(a, b)| (a - b).abs() < 0.001));
+        assert!(edit_table(index, vec![vec![f32::NAN; TABLE_SIZE]]).is_err());
+        assert!(edit_table(0, vec![vec![0.0; TABLE_SIZE]]).is_err());
+    }
+
+    #[test]
+    fn failed_table_save_does_not_change_the_playing_table() {
+        let _guard = lock_tables();
+        let index = add_table(unique_name("Failed save"), vec![one_harmonic(1)]).unwrap();
+        let before = table_shape(index as u8, 0.0, 256);
+        let cycle: Vec<f32> = (0..TABLE_SIZE).map(|i| (std::f32::consts::TAU * i as f32 / TABLE_SIZE as f32).cos()).collect();
+        let error = edit_table_and_persist(index, vec![cycle.clone()], |_| Err("disk full".into())).unwrap_err();
+        assert_eq!(error, "disk full");
+        assert_eq!(before, table_shape(index as u8, 0.0, 256));
+        let count = table_count();
+        assert!(add_sample_table_and_persist(unique_name("Failed import"), vec![cycle], |_| Err("disk full".into())).is_err());
+        assert_eq!(count, table_count());
     }
 
     #[test]

@@ -3,14 +3,14 @@ import type { ComponentProps } from 'react';
 import { describe, expect, it } from 'vitest';
 import { ProcessorRack } from './ProcessorRack';
 import { ProcessorsPage } from '../pages/ProcessorsPage';
-import { defaultChain, emptyPresets, idleEqResponse, idleMeters } from '../model';
+import { defaultChain, effectNames, emptyPresets, idleEqResponse, idleMeters } from '../model';
 
 type Chain = ComponentProps<typeof ProcessorRack>['chain'];
 
 const chain: Chain = {
   native: true, chain: defaultChain, meters: idleMeters, eqCurve: idleEqResponse, error: '',
   presets: emptyPresets, patchError: '',
-  setPanner: () => {}, setReverb: () => {}, setLimiter: () => {}, setCompressor: () => {}, setSaturator: () => {}, setOrder: () => {}, setStereoMode: () => {}, randomizeReverb: () => {},
+  setPanner: () => {}, setReverb: () => {}, setLimiter: () => {}, setCompressor: () => {}, setSaturator: () => {}, setEffect: () => {}, setOrder: () => {}, setStereoMode: () => {}, randomizeReverb: () => {},
   setEq: () => {}, updateFilter: () => {}, addFilter: () => {}, removeFilter: () => {},
   resetEq: () => {}, matchHeadroom: () => {},
   applyPreset: () => {}, renamePreset: async () => true, deletePreset: () => {},
@@ -18,6 +18,15 @@ const chain: Chain = {
 const render = (settings: Chain) => renderToStaticMarkup(<ProcessorsPage chain={settings} onOpenEq={() => {}} />);
 
 describe('processor rack', () => {
+  it('exposes the additional effects with independent bypass and controls', () => {
+    const markup = render(chain);
+    for (const name of effectNames) {
+      expect(markup).toContain(`aria-label="${name} enabled"`);
+      expect(markup).toContain(`aria-label="${name} Mix"`);
+    }
+    expect(markup).toContain('fixed order · before limiter');
+  });
+
   it('switches the rack between left/right and mid/side', () => {
     const markup = render(chain);
     expect(markup).toContain('aria-label="Channels"');

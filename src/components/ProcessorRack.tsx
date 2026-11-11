@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronUp, Dices } from 'lucide-react';
 import {
-  limiterDetectors, limiterReleases, moveStage, reflectionTimbres, reverbTime, stageModels,
+  effectNames, limiterDetectors, limiterReleases, moveStage, reflectionTimbres, reverbTime, stageModels,
   stageNames, stereoModes, type LimiterDetector, type LimiterRelease, type StageId, type StereoMode,
 } from '../model';
 import type { useChain } from '../useChain';
@@ -289,10 +289,27 @@ function CompressorStage(props: StageProps) {
 function SaturatorStage(props: StageProps) {
   const { chain } = props;
   const saturator = chain.chain.saturator;
+  // The stage's own picture: the tanh curve it runs, against the straight line it
+  // would be with no drive. The drawing moves with the Drive knob, so what the knob
+  // is doing to the waveform is visible and not only heard.
+  const gain = 10 ** (saturator.driveDb / 20);
+  const curve = Array.from({ length: 49 }, (_, index) => {
+    const x = index / 48 * 2 - 1;
+    return `${(50 + x * 46).toFixed(2)},${(50 - Math.tanh(x * gain) * 46).toFixed(2)}`;
+  }).join('L');
   return <li className={`stage saturator ${saturator.enabled ? 'in-path' : ''}`} aria-labelledby="stage-saturator">
     <Head {...props} stage="saturator" on={saturator.enabled} onToggle={() => chain.setSaturator({ enabled: !saturator.enabled })} />
     <div className="stage-body">
       <div className="stage-controls saturator">
+        <div className="curve-cell">
+          <span className="rack-label">Transfer</span>
+          <svg className="saturator-curve" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={`Drive curve at ${signed(saturator.driveDb)} dB`}>
+            <line className="saturator-axis" x1="0" x2="100" y1="50" y2="50" />
+            <line className="saturator-axis" x1="50" x2="50" y1="0" y2="100" />
+            <path className="saturator-reference" d="M4,96L96,4" />
+            <path className="saturator-line" d={`M${curve}`} />
+          </svg>
+        </div>
         <div className="stage-knobs">
           <Knob size={44} label="Drive" value={saturator.driveDb} min={0} max={24} step={0.5} reset={6} ticks={[0, 6, 12, 18, 24]} format={value => `${signed(value)} dB`} description="How hard the curve is pushed" onChange={value => chain.setSaturator({ driveDb: value })} />
           <Knob size={44} label="Tone" value={saturator.tone} min={0} max={1} step={0.01} reset={0.5} format={percent} description="Darker below half, brighter above it, neutral at half" onChange={value => chain.setSaturator({ tone: value })} />
@@ -390,6 +407,55 @@ function LimiterStage(props: StageProps) {
   </li>;
 }
 
+const effectControls: { amount?: string; rate?: string; feedback?: string }[] = [
+  { amount: 'Crossfeed', rate: 'Time', feedback: 'Feedback' },
+  { amount: 'Depth', rate: 'Rate' },
+  { amount: 'Depth', rate: 'Rate', feedback: 'Feedback' },
+  { amount: 'Depth', rate: 'Rate', feedback: 'Feedback' },
+  { amount: 'Bit reduction', rate: 'Rate reduction' },
+  { amount: 'Drive' },
+  { amount: 'Depth', rate: 'Rate' },
+  { amount: 'Depth', rate: 'Rate' },
+  { amount: 'Width' },
+  { rate: 'Frequency' },
+  { rate: 'Shift' },
+  { amount: 'Threshold', rate: 'Release' },
+];
+
+function EffectsBank({ chain }: { chain: ReturnType<typeof useChain> }) {
+  const active = chain.chain.effects.filter(effect => effect.enabled).length;
+  return <section aria-label="Additional effects" className="stage fx-bank">
+    <header className="stage-head">
+      <div className="stage-name"><h3>Additional effects</h3><span className="stage-model mono">fixed order · before limiter</span></div>
+      <span className="fx-count mono">{active ? `${active} of ${effectNames.length} in the path` : 'all bypassed'}</span>
+    </header>
+    <p className="stage-note">These effects run in the order below immediately before the limiter, wherever it is placed in the rack.</p>
+    <div className="fx-grid">
+      {effectNames.map((name, index) => {
+        const effect = chain.chain.effects[index];
+        const controls = effectControls[index];
+        const set = (patch: Partial<typeof effect>) => chain.setEffect(index, patch);
+        return <section key={name} className={`fx-card ${effect.enabled ? 'on' : ''}`} aria-label={name}>
+          <div className="fx-card-head">
+            <span className="fx-card-index mono" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+            <h4>{name}</h4>
+            <Power on={effect.enabled} label={`${name} enabled`} onToggle={() => set({ enabled: !effect.enabled })} />
+          </div>
+          <div className="fx-knobs">
+            {(['amount', 'rate', 'feedback'] as const).map(key => controls[key] && <Knob
+              key={key} label={`${name} ${controls[key]}`} caption={controls[key]} value={effect[key]}
+              min={0} max={1} step={0.01} reset={0.5} format={percent}
+              onChange={value => set({ [key]: value })} size={44}
+            />)}
+            <Knob label={`${name} Mix`} caption="Mix" value={effect.mix} min={0} max={1} step={0.01} reset={0.5}
+              format={percent} onChange={value => set({ mix: value })} size={44} />
+          </div>
+        </section>;
+      })}
+    </div>
+  </section>;
+}
+
 export function ProcessorRack({ chain, onOpenEq = () => {} }: Props) {
   const { order, limiter } = chain.chain;
   const meters = chain.meters;
@@ -429,6 +495,8 @@ export function ProcessorRack({ chain, onOpenEq = () => {} }: Props) {
     <ol className="rack-stages">
       {order.map((stage, index) => strip(stage, index))}
     </ol>
+
+    <EffectsBank chain={chain} />
 
     <section className="meter-bridge" aria-label="Limiter meters">
       <header className="stage-head">

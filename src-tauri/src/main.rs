@@ -7,7 +7,9 @@ mod chain;
 mod compressor;
 mod eq;
 mod export;
+mod fx;
 mod loudness;
+mod packs;
 mod saturator;
 mod library;
 mod limiter;
@@ -114,6 +116,7 @@ fn main() {
                 chain::set_stereo_mode,
                 chain::set_compressor,
                 chain::set_saturator,
+                chain::set_effect,
                 chain::set_eq,
                 chain::eq_response,
                 chain::eq_presets,
@@ -131,6 +134,7 @@ fn main() {
                 render::null_test,
                 filescan::scan_file,
                 synth_out::synth_patch,
+                synth_out::synth_packs,
                 synth_out::set_synth,
                 synth_out::synth_status,
                 synth_out::synth_start,
@@ -146,6 +150,8 @@ fn main() {
                 synth_out::synth_record,
                 synth_out::synth_bounce,
                 synth_out::synth_table_shape,
+                synth_out::synth_editable_table,
+                synth_out::synth_save_table,
                 synth_out::synth_import_table,
                 synth_out::synth_choose_table,
                 synth_out::synth_scales,
@@ -153,6 +159,7 @@ fn main() {
                 synth_out::synth_choose_scale,
                 synth_out::synth_midi_devices,
                 synth_out::synth_midi_open,
+                synth_out::synth_set_mpe,
                 synth_out::synth_midi_close,
                 artwork::track_artwork,
                 library::scan_library,

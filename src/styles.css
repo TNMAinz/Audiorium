@@ -1210,7 +1210,20 @@ select:disabled { opacity: .55; }
 /* Six dials and a meter: three to a row while the page is narrow, all six in one
    row once there is width for them, so the strip stays a row of controls. */
 .stage-controls.compressor { display: grid; grid-template-columns: minmax(0, 1fr); }
+/* The saturator is a curve and three dials: the curve takes the cell the panner's pad
+   has, so the stage fills its strip instead of stopping a third of the way across it. */
+.stage-controls.saturator { display: grid; grid-template-columns: 172px minmax(0, 1fr); align-items: center; gap: 10px 18px; }
 .stage-controls.compressor .stage-knobs, .stage-controls.saturator .stage-knobs { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
+.curve-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.saturator-curve {
+  width: 100%; height: 86px; border: 1px solid var(--hairline-soft);
+  border-radius: 2px; background: var(--inset);
+}
+.saturator-axis { stroke: rgb(var(--rim-rgb) / .14); stroke-width: 1; vector-effect: non-scaling-stroke; }
+/* The unprocessed signal is the reference: the curve bends away from it as the drive
+   goes up, so the dotted line is what the stage would sound like if it did nothing. */
+.saturator-reference { fill: none; stroke: rgb(var(--rim-rgb) / .3); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.saturator-line { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 @media (min-width: 1200px) {
   .stage-controls.compressor .stage-knobs { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
@@ -1407,7 +1420,12 @@ select:disabled { opacity: .55; }
   .stage-controls.room { grid-template-columns: minmax(0, 1fr); }
   .stage-controls.room .stage-knobs { grid-template-columns: repeat(3, minmax(70px, 1fr)); }
   .stage-controls.limiter { grid-template-columns: minmax(0, 1fr); }
-  .stage-controls.compressor .stage-knobs, .stage-controls.saturator .stage-knobs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage-controls.saturator { grid-template-columns: minmax(0, 1fr); }
+  .stage-controls.compressor .stage-knobs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* The curve takes its own row here, so the three dials keep one row under it
+     rather than leaving the third alone on a line of its own. */
+  .stage-controls.saturator .stage-knobs { grid-template-columns: repeat(3, minmax(70px, 1fr)); }
+  .curve-cell { max-width: 280px; }
   .stage-readout .tap-strip { flex-basis: 100%; max-width: none; margin-left: 0; }
   .pad-cell { max-width: 280px; }
 }
@@ -1916,13 +1934,18 @@ select:disabled { opacity: .55; }
   margin: 4px 0 0; font-size: 10px; letter-spacing: .03em; color: #8390a4;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.synth-dialog-body { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
-.synth-panel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 24px; }
-/* Inside the grid each section is a cell of its own: no rule between neighbours. */
-.synth-panel-grid > .synth-section + .synth-section { margin-top: 0; padding-top: 0; border-top: 0; }
+.synth-dialog-body { flex: 1; min-height: 0; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.synth-dialog:focus, .synth-dialog:focus-visible { outline: none; }
+.synth-panel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 
-.synth-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.synth-section + .synth-section { margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+/* Every section of a panel is a module with its own edge: two oscillators side by
+   side read as two, and the knobs under a heading belong to that heading. A rule
+   drawn between stacked sections is what made one panel run into the next. */
+.synth-section {
+  display: flex; flex-direction: column; gap: 9px; min-width: 0;
+  padding: 11px 12px 12px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--inset);
+}
 .synth-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .synth-section-head h3 {
   margin: 0; font-family: var(--font-mono); font-size: 10px; font-weight: 400;
@@ -1944,6 +1967,10 @@ select:disabled { opacity: .55; }
   font-family: var(--font-mono); font-size: 11px; letter-spacing: .02em;
 }
 .synth-select:hover { border-color: rgb(var(--lit-rgb) / .35); }
+/* A select is a choice, not a form: it takes the width of its longest option, never
+   the width of the panel it sits in. */
+.synth-select { width: auto; flex: 0 1 auto; }
+.synth-section-head .synth-select { max-width: 62%; margin-left: auto; }
 /* One route a line: source, arrow, destination, amount. The list scrolls inside the
    dialog rather than growing it past the window. */
 .synth-mod-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 236px; overflow-y: auto; }
@@ -1954,8 +1981,10 @@ select:disabled { opacity: .55; }
 }
 .synth-mod-route .synth-select { width: 100%; }
 /* The curve belongs to the route, not to one of its two ends, so it takes its own
-   line under source → destination. */
-.synth-mod-route .synth-mod-curve { grid-column: 1 / -1; }
+   line under source → destination, and the remove button keeps the end of the first
+   line. Spanning every column pushed that button onto a third line of its own. */
+.synth-mod-route .synth-mod-curve { grid-column: 1 / 5; }
+.synth-mod-route > button { grid-column: 5; grid-row: 1; justify-self: end; }
 .synth-mod-arrow { color: #6d7889; font-size: 11px; }
 .synth-facts { display: grid; gap: 3px; margin: 8px 0 0; }
 .synth-facts > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; font-size: var(--fs-micro); }
@@ -2008,6 +2037,90 @@ select:disabled { opacity: .55; }
   width: 100%; padding: 6px 8px; border-radius: 3px; border: 1px solid var(--line);
   background: var(--inset); color: #dde6f2; font: inherit; font-size: var(--fs-sm);
 }
+/* Sixteen channels drawn as the strip they are: a master at each end, the member
+   channels between them. The zones are read at a glance, instead of counted out of
+   four number fields. */
+.mpe-map { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 2px; }
+.mpe-map span {
+  display: grid; place-items: center; height: 19px; border-radius: 2px;
+  border: 1px solid var(--line-soft); background: rgba(255, 255, 255, .015);
+  font-family: var(--font-mono); font-size: 9px; color: #5d6a7c;
+}
+.mpe-map span.member {
+  border-color: rgb(var(--accent-rgb) / .34); background: rgb(var(--accent-rgb) / .16); color: #cfe3ff;
+}
+/* The master is the channel a zone is configured on, so it is an outline among the
+   filled members rather than a fifth shade of fill. */
+.mpe-map span.master {
+  border-color: rgb(var(--accent-2-rgb) / .8); background: rgb(var(--accent-2-rgb) / .06);
+  color: #f4e9ff; box-shadow: inset 0 0 0 1px rgb(var(--accent-2-rgb) / .35);
+}
+
+/* ---------- the preset shelf ---------- */
+/* A pack is one card: what it is called, what it is for, and its four patches with the
+   loaded one lit. The grid is the shelf, so the page reads at a glance without a
+   second panel hiding what the packs hold. */
+.presets-page .page-body-view > .scroll-view { gap: 10px; }
+.presets-toolbar { flex: none; gap: 10px; }
+.presets-find { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.presets-count { flex: none; font-size: 10px; letter-spacing: .04em; color: #8d9bb0; }
+.presets-families { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets-family {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 2px;
+  border: 1px solid var(--line); background: transparent; color: #a9b6c8; font: inherit;
+  font-size: var(--fs-micro); letter-spacing: .02em; cursor: pointer;
+}
+.presets-family:hover:not(:disabled) { border-color: rgb(var(--lit-rgb) / .35); color: #e6eefb; }
+.presets-family.on { border-color: rgb(var(--accent-rgb) / .55); background: rgb(var(--accent-rgb) / .08); color: #eaf3ff; }
+.presets-family:disabled { opacity: .4; cursor: default; }
+.presets-family span { font-size: 9px; color: #7f8da3; }
+.presets-family.on span { color: var(--accent-light); }
+/* The coverage report: what the shelf actually holds on each axis, counted by the engine
+   from the packs it ships. A row is only ever full or short of its total, so a missing
+   cell of the grid reads as a number rather than as nothing. */
+.presets-coverage {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+.presets-coverage-title { font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: #7f8da3; }
+.presets-coverage-rows { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.presets-coverage-row {
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 8px; border-radius: 2px;
+  border: 1px solid var(--line); background: var(--inset);
+}
+.presets-coverage-row span { font-size: 9px; color: #8d9bb0; }
+.presets-coverage-row em { font-style: normal; font-size: var(--fs-micro); color: #a9b6c8; }
+.presets-coverage-row.full span { color: var(--accent-light); }
+.presets-coverage-row.gap { border-color: rgb(255 140 120 / .35); }
+.presets-coverage-row.gap span { color: #ff9c8a; }
+.presets-coverage-grid { margin-left: auto; font-size: 9px; letter-spacing: .04em; color: #7f8da3; }
+.presets-empty { margin: 0; }
+.presets-grid { flex: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(272px, 1fr)); gap: 10px; align-content: start; }
+.presets-card {
+  display: flex; flex-direction: column; gap: 10px; padding: 13px 13px 9px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--panel); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+}
+.presets-head { display: grid; gap: 4px; }
+.presets-family-tag { font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: rgb(var(--accent-rgb) / .9); }
+.presets-head h2 {
+  margin: 0; font-size: var(--fs-body); font-weight: 500; color: #e8eefa;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.presets-head p { margin: 0; font-size: var(--fs-micro); line-height: 1.45; color: #93a1b6; }
+.presets-patches { display: grid; gap: 2px; margin-top: auto; }
+.presets-patch {
+  display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  width: 100%; padding: 6px; border-radius: 2px; border: 1px solid transparent;
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.presets-patch:hover { border-color: var(--line); background: var(--inset); }
+.presets-patch span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); color: #cfd9e8; }
+.presets-patch em { font-style: normal; font-size: 8.5px; letter-spacing: .08em; text-transform: uppercase; color: #66748a; }
+.presets-lamp { width: 5px; height: 5px; border-radius: 50%; background: #253042; box-shadow: inset 0 0 0 1px rgb(var(--rim-rgb) / .18); }
+.presets-patch.loaded { border-color: rgb(var(--accent-rgb) / .35); background: rgb(var(--accent-rgb) / .07); }
+.presets-patch.loaded .presets-lamp { background: var(--accent-light); box-shadow: 0 0 6px -1px rgb(var(--lit-rgb) / .8); }
+.presets-patch.loaded span { color: #f0f6ff; }
+.presets-patch.loaded em { color: var(--accent-light); }
 
 /* ---------- the keyboard ---------- */
 /* The keyboard is the page's floor: it stays where the hands expect it. */
@@ -2018,7 +2131,7 @@ select:disabled { opacity: .55; }
   position: relative; display: flex; gap: 1px; height: 92px; padding: 0;
   border: 1px solid var(--line); border-radius: var(--radius); background: #080c12; overflow: hidden;
 }
-.piano-key { font: inherit; border: 0; cursor: pointer; padding: 0; touch-action: none; }
+.piano-key { font: inherit; border: 0; cursor: pointer; padding: 0; touch-action: none; transition: transform 90ms ease, background 90ms ease; }
 .piano-key.white {
   position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
   justify-content: flex-end; align-items: center; gap: 2px; padding-bottom: 5px;
@@ -2028,19 +2141,23 @@ select:disabled { opacity: .55; }
 .piano-key.white:hover { background: linear-gradient(#ffffff, #dbe5f2); }
 .piano-key.black {
   position: absolute; top: 0; height: 62%; z-index: 2;
-  /* The centring is its own property, not part of `transform`. A press applies the
-     shared `button:active` scale through `transform`, and while the two shared that
-     property the scale replaced this shift and threw the key half a width sideways. */
+  /* The centring is its own property, not part of `transform`. A pressed key is
+     scaled through `transform`, and while the two shared that property the scale
+     replaced this shift and threw the key half a width sideways. */
   translate: -50% 0;
   border-radius: 0 0 2px 2px; display: flex; flex-direction: column; justify-content: flex-end;
   align-items: center; padding-bottom: 4px; background: linear-gradient(#212b3a, #0a0e15);
   color: #8b9ab0; font-size: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, .5);
 }
 .piano-key.black:hover { background: linear-gradient(#2b3a4e, #111823); }
-.piano-key.black:active:not(:disabled) { transform: scale(.97); }
-.piano-key.white:active:not(:disabled) { transform: scale(.985); }
-.piano-key.held { background: linear-gradient(#d7e9ff, #7fb3ea); color: #1d3a5c; }
-.piano-key.black.held { background: linear-gradient(#3f6f9e, #1d344b); color: #cfe6ff; }
+/* The press belongs to the note, not to the button the press started on. `:active`
+   sticks to that one key for the whole press, so a drag left it looking down while the
+   keys it travelled over were the ones sounding. The held class is what the sounding
+   notes already carry, and it moves with the cursor — so it is declared after `:active`
+   and covers hover too, or the key under the pointer would look merely hovered. */
+.piano-key:active:not(:disabled) { transform: none; }
+.piano-key.white.held { background: linear-gradient(#d7e9ff, #7fb3ea); color: #1d3a5c; transform: scale(.985); }
+.piano-key.black.held { background: linear-gradient(#3f6f9e, #1d344b); color: #cfe6ff; transform: scale(.97); }
 .piano-key:disabled { cursor: default; opacity: .55; }
 .piano-hint { font-family: var(--font-mono); line-height: 1; text-transform: uppercase; }
 .piano-name { font-family: var(--font-mono); font-size: 8px; opacity: .65; line-height: 1; }
@@ -2059,10 +2176,126 @@ select:disabled { opacity: .55; }
 }
 @media (max-width: 900px) {
   .synth-panel-grid { grid-template-columns: minmax(0, 1fr); }
-  .synth-panel-grid > .synth-section + .synth-section { margin-top: 0; padding-top: 14px; border-top: 1px solid var(--line-soft); }
 }
 @media (max-width: 760px) {
   .synth-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .synth-fx-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .synth-book-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- one grid for the instrument's detail panels ---------- */
+/* Every knob group in a panel sits on the same four columns, so a row under another
+   row reads down the same lines even when one panel is half a dialog wide and the
+   next is all of it. The old auto-fit grid gave each section as many columns as its
+   own width allowed, which is why four knobs under two oscillators ran at one pitch
+   and four under the mix at another. */
+.synth-knobs { grid-template-columns: repeat(4, minmax(0, 1fr)); justify-items: center; max-width: 412px; }
+/* A whole row of four is the section's own width: the mix is the only section that
+   gets a full line, and four dials held to half of it left the rest of the card bare. */
+.synth-knobs.four { max-width: none; }
+/* The filter's five dials stay one row: five columns only where the panel is half a
+   dialog wide, which is exactly the filter's own section. */
+.synth-knobs.dense { grid-template-columns: repeat(5, minmax(0, 1fr)); max-width: none; }
+
+/* A labelled value: the small mono name above the field, the field full width. Used
+   by the MPE zones and the wavetable editor, which are settings rather than knobs. */
+.synth-entries { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.synth-entry { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.synth-entry > span {
+  min-width: 0; font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em;
+  text-transform: uppercase; color: #7f8da3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.synth-entry input, .synth-entry select {
+  width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--inset); color: #dbe6f2;
+  font-family: var(--font-mono); font-size: 11px;
+}
+.synth-entry input[type='number'] { text-align: right; font-variant-numeric: tabular-nums; }
+.synth-entry input:hover, .synth-entry select:hover { border-color: rgb(var(--lit-rgb) / .3); }
+.synth-entry input:focus-visible, .synth-entry select:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; }
+.synth-entry.narrow { flex: none; width: 148px; }
+
+/* The wavetable editor: one toolbar, the drawn cycle, and three equal groups under
+   it. Fieldset is only here to disable the whole editor in one attribute while a
+   save is in flight, so it carries no frame of its own. */
+.synth-editor { display: flex; flex-direction: column; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.synth-toolbar { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.synth-toolbar-gap { flex: 1 1 auto; }
+/* The editor has its own panel now, so the waveform gets the height of a drawing
+   surface rather than a strip between two rows of controls. */
+.synth-editor-graph { height: 232px; cursor: crosshair; }
+.synth-editor-graph .synth-graph-line { fill: none; stroke-width: 1.6; }
+/* The drawn cycle has a body: the area between the curve and the zero line, so the
+   shape reads as a wave and not as a line graph of one. */
+.synth-graph-area { fill: rgb(var(--accent-rgb) / .13); stroke: none; }
+
+/* The partials the waveform is made of: one bar each, so a harmonic edit is seen in
+   the spectrum it changes rather than only in the number beside it. */
+.synth-spectrum { display: flex; flex-direction: column; gap: 4px; }
+.synth-spectrum-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.synth-bars {
+  display: flex; align-items: flex-end; gap: 1px; height: 54px; padding: 4px 5px;
+  border-radius: var(--radius); border: 1px solid var(--line);
+  background:
+    linear-gradient(to top, transparent 49%, rgb(var(--rim-rgb) / .12) 49%, rgb(var(--rim-rgb) / .12) calc(49% + 1px), transparent calc(49% + 1px)),
+    rgba(2, 5, 9, .5);
+  cursor: pointer; overflow: hidden;
+}
+.synth-bars i { flex: 1 1 0; min-width: 0; border-radius: 1px 1px 0 0; background: rgb(var(--accent-rgb) / .34); }
+.synth-bars i.on { background: var(--accent); box-shadow: 0 0 6px rgb(var(--accent-rgb) / .55); }
+.synth-bars:hover i { background: rgb(var(--accent-rgb) / .46); }
+.synth-bars:hover i.on { background: var(--accent); }
+
+/* The three wells share one height, whatever their number of fields: a row of cards
+   with three different bottom edges is what made the editor look unfinished. */
+.synth-edit-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
+/* The three groups sit inside the editor's card, so they are wells rather than cards:
+   a lighter frame and a darker floor, not another edge of the same weight. */
+.synth-group {
+  display: flex; flex-direction: column; gap: 7px; min-width: 0;
+  padding: 9px 10px 10px; border: 1px solid var(--line-soft);
+  border-radius: var(--radius); background: rgba(2, 5, 9, .42);
+}
+.synth-group h4 {
+  margin: 0 0 1px; font-family: var(--font-mono); font-size: 10px; font-weight: 400;
+  letter-spacing: .1em; text-transform: uppercase; color: #8290a4;
+}
+.synth-group .page-button { width: 100%; justify-content: center; }
+/* A field in a well is one line: the name left, the value right, so three groups of
+   two or three fields are the same height and read down one line each. */
+.synth-entry.row { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+.synth-entry.row > span { flex: 1 1 auto; }
+.synth-entry.row input, .synth-entry.row select { width: 94px; flex: none; }
+
+/* The additional effects are one card each on the rack's own width: name and switch
+   on the card's line, four dials under it. Twelve cards read as a bank instead of
+   twelve full-width strips that leave the right half of the page empty. */
+.fx-count { margin-left: auto; font-size: var(--fs-micro); color: #8b9ab4; white-space: nowrap; }
+.fx-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(304px, 1fr)); gap: 10px; }
+.fx-card {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  padding: 9px 10px 10px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--inset);
+}
+.fx-card.on { border-color: rgb(var(--accent-rgb) / .32); background: rgb(var(--accent-rgb) / .05); box-shadow: inset 2px 0 0 var(--accent); }
+.fx-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fx-card-index { font-size: 9px; color: #6c7889; letter-spacing: .06em; }
+.fx-card-head h4 { flex: 1; min-width: 0; margin: 0; font-size: var(--fs-sm); font-weight: 500; color: #e9eef6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fx-card .stage-power { padding: 3px 7px 3px 6px; font-size: 9px; }
+/* A card's dials are spread over the card, whatever their number: two dials sat in
+   the first two of four columns and left the rest of the card hollow. */
+.fx-knobs { display: flex; align-items: flex-start; justify-content: space-around; gap: 6px; }
+.fx-knobs .knob { flex: 0 0 auto; min-width: 0; }
+
+@media (max-width: 980px) {
+  .synth-edit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fx-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+}
+@media (max-width: 700px) {
+  .synth-entries { grid-template-columns: minmax(0, 1fr); }
+  .synth-edit-grid { grid-template-columns: minmax(0, 1fr); }
+  .fx-grid { grid-template-columns: minmax(0, 1fr); }
+  .synth-entry.narrow { width: 100%; }
+  .synth-toolbar-gap { display: none; }
+  .synth-toolbar .page-button { flex: 1 1 auto; }
 }

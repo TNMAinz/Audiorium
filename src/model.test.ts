@@ -3,7 +3,7 @@ import { defaultChain, defaultOrder, defaultSynth, describeSynth, idleSynthStatu
 
 describe('workspace and scene configuration', () => {
   it('defines accessible copy for every navigation destination', () => {
-    expect(Object.keys(workspaces)).toEqual(['Orbit', 'Spectrum', 'Flow', 'Processors', 'Eq', 'Synth', 'Master', 'Spatial', 'Library', 'Devices']);
+    expect(Object.keys(workspaces)).toEqual(['Orbit', 'Spectrum', 'Flow', 'Processors', 'Eq', 'Synth', 'Presets', 'Master', 'Spatial', 'Library', 'Devices']);
     for (const item of Object.values(workspaces)) {
       expect(item.title.length).toBeGreaterThan(0);
       expect(item.description.length).toBeGreaterThan(0);

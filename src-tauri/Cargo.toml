@@ -1,6 +1,6 @@
 [package]
 name = "audiorium"
-version = "2.0.3"
+version = "2.6.0"
 description = "A local-first audio observatory"
 authors = ["AUDIORIUM contributors"]
 edition = "2021"

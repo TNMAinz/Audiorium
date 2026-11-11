@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::compressor::{self, Compressor, CompressorConfig};
 use crate::eq::{self, Eq, EqConfig, EqFilter, EqResponse};
+use crate::fx::{self, EffectConfig, Effects};
 use crate::presets::{Library, PresetList};
 use crate::saturator::{self, Saturator, SaturatorConfig};
 use crate::store::{self, Store, Stored};
@@ -133,6 +134,7 @@ pub struct ChainConfig {
     pub compressor: CompressorConfig,
     pub saturator: SaturatorConfig,
     pub limiter: LimiterConfig,
+    pub effects: [EffectConfig; fx::COUNT],
 }
 
 impl Default for ChainConfig {
@@ -146,6 +148,7 @@ impl Default for ChainConfig {
             compressor: CompressorConfig::default(),
             saturator: SaturatorConfig::default(),
             limiter: LimiterConfig::default(),
+            effects: [EffectConfig::default(); fx::COUNT],
         }
     }
 }
@@ -166,7 +169,8 @@ impl ChainConfig {
         eq::validate(&self.eq)?;
         compressor::validate(&self.compressor)?;
         saturator::validate(&self.saturator)?;
-        limiter::validate(&self.limiter)
+        limiter::validate(&self.limiter)?;
+        fx::validate(&self.effects)
     }
 }
 
@@ -203,6 +207,7 @@ pub struct Chain {
     compressor: Compressor,
     saturator: Saturator,
     limiter: Limiter,
+    effects: Effects,
 }
 
 impl Chain {
@@ -215,6 +220,7 @@ impl Chain {
             compressor: Compressor::new(config.compressor),
             saturator: Saturator::new(config.saturator),
             limiter: Limiter::new(config.limiter),
+            effects: Effects::new(),
         }
     }
 
@@ -240,6 +246,7 @@ impl Chain {
             || config.compressor.enabled
             || config.saturator.enabled
             || config.limiter.enabled
+            || config.effects.iter().any(|effect| effect.enabled)
     }
 
     /// The rack alone, without the spatial layout. The master page renders a file
@@ -262,7 +269,10 @@ impl Chain {
                 StageId::Eq => self.eq.process(signal, &config.eq),
                 StageId::Compressor => self.compressor.process(signal, config.compressor),
                 StageId::Saturator => self.saturator.process(signal, config.saturator),
-                StageId::Limiter => self.limiter.process(signal, config.limiter),
+                StageId::Limiter => {
+                    signal = self.effects.process(signal, &config.effects);
+                    self.limiter.process(signal, config.limiter)
+                },
             };
         }
         if pair {
@@ -385,6 +395,7 @@ impl ChainState {
             && !config.compressor.enabled
             && !config.saturator.enabled
             && !config.limiter.enabled
+            && !config.effects.iter().any(|effect| effect.enabled)
     }
 
     pub fn update(
@@ -649,6 +660,16 @@ pub fn set_saturator(
     })
 }
 
+#[tauri::command]
+pub fn set_effect(
+    state: tauri::State<'_, Arc<ChainState>>,
+    index: usize,
+    effect: EffectConfig,
+) -> Result<ChainConfig, String> {
+    if index >= fx::COUNT { return Err("Unknown effect".into()); }
+    state.update(|config| config.effects[index] = effect)
+}
+
 /// The whole equaliser in one call: the band list replaces the running one, so
 /// the interface can never describe a cascade the engine is not running.
 #[tauri::command]
@@ -864,6 +885,25 @@ mod tests {
         let meters = chain.meters(&idle);
         assert_eq!(meters.wet_mix, 0.0);
         assert_eq!(meters.gain_reduction_db, 0.0);
+    }
+
+    #[test]
+    fn additional_effects_are_saved_and_run_through_the_shared_chain() {
+        let path = scratch("effects");
+        let state = ChainState::load(Store::at(path.clone()));
+        let changed = state.update(|config| {
+            config.effects[5].enabled = true;
+            config.effects[5].amount = 1.0;
+            config.effects[5].mix = 1.0;
+        }).unwrap();
+        assert!(!ChainState::idle(&changed));
+        let mut chain = Chain::new(SpatialConfig::default(), changed.clone());
+        let output = chain.process_rack([0.2, -0.2], &changed);
+        assert!(output[0] > 0.5 && output[1] < -0.5);
+        assert!(wait_for(&path, "\"effects\""));
+        let restored = ChainState::load(Store::at(path.clone())).config();
+        assert_eq!(restored.effects, changed.effects);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

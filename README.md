@@ -3,12 +3,13 @@
 A music player and a software instrument for Windows, both of which show you what
 they are doing to the sound.
 
-Audiorium decodes the files on your disk and plays them through a spatial renderer
-and a rack of six processors — a binaural panner, a reverb, a 24-band parametric
+Audiorium decodes the files on your disk and plays them through a spatial renderer,
+a rack of six processors — a binaural panner, a reverb, a 24-band parametric
 equaliser, a compressor, a saturator and a look-ahead limiter — in an order you set
-and can change while the music plays. Its meters and its spectrum are computed from
-real audio — the frames it hands to the sound card, or a source you point it at — so
-a change to the chain shows up in what you see as well as in what you hear.
+and can change while the music plays, and a bank of twelve effects that runs just
+before the limiter. Its meters and its spectrum are computed from real audio — the
+frames it hands to the sound card, or a source you point it at — so a change to the
+chain shows up in what you see as well as in what you hear.
 
 The same rack is the effects section of a sixteen-voice wavetable instrument on the
 Synth page, and it runs over a whole file offline on the Master page: there it
@@ -41,10 +42,10 @@ it is missing at launch the Windows default is used until it returns.
 
 ## The chain
 
-Every frame meets the spatial renderer, then walks a rack of six processors. The
-order is a list the engine runs, not a drawing of one: each strip on the Processors
-page has arrows that move it earlier or later, and moving a stage changes what the
-audio does. The rack can also run on left and right or on mid and side, where the
+Every frame meets the spatial renderer, then walks a rack of six processors, then
+the bank of twelve effects. The order of the six is a list the engine runs, not a
+drawing of one: each strip on the Processors page has arrows that move it earlier or
+later, and moving a stage changes what the audio does. The rack can also run on left and right or on mid and side, where the
 processors work on the sum and the difference, so an equaliser can shape the centre
 of a mix without moving its sides. Any stage can be taken out of the path, and a
 bypassed stage is bit-exact: the samples come back out unchanged.
@@ -84,7 +85,15 @@ than a processor. A master renders the rack alone.
    normalised so a full-scale sample leaves at full scale; Tone tilts the result
    dark or bright from 2.5 kHz; Mix blends it against the dry signal, delay-matched
    so a half mix does not comb. It is not an amp sim and not tape: no wow, no bias.
-7. **Limiter.** A look-ahead peak limiter: 72 samples of look-ahead, an output
+7. **A bank of twelve effects.** Delay, chorus, flanger, phaser, bitcrusher,
+   distortion, tremolo, auto-filter, a stereo widener, ring modulation, frequency
+   shift and a noise gate, each with the two or three controls its own algorithm
+   needs plus a mix. They are not strips in the order: the bank always runs
+   immediately before the limiter, wherever that stage has been moved to, and the
+   Processors page says so where it shows them. An effect that is switched off is
+   bit-exact, and the tail a delay leaves is rendered into a master instead of
+   stopping at the file's last frame.
+8. **Limiter.** A look-ahead peak limiter: 72 samples of look-ahead, an output
    level of −0.3 dBFS by default, fast/medium/slow release, both/left/right
    detection, optional soft clip and automatic make-up that normalises the
    limited peak to the output level. The gain works from the threshold and the
@@ -92,9 +101,10 @@ than a processor. A master renders the rack alone.
    more limited. It is not a true-peak limiter and not a loudness normaliser.
 
 Five of the six are edited on the Processors page, which names what each stage is
-holding, orders them and meters the compressor and the limiter from the engine. The
-equaliser keeps a page of its own, and the Signal chain page draws the whole path
-in the order the audio meets it.
+holding, orders them, meters the compressor and the limiter from the engine, and
+carries the twelve-effect bank under the strips. The equaliser keeps a page of its
+own, and the Signal chain page draws the whole path in the order the audio meets
+it.
 
 ![The Processors page, with all six stages in the path](screenshots/processors.png)
 
@@ -125,9 +135,9 @@ that copy active and follows it from then on. All of it survives a restart.
 The Synth page is a second source with a clock of its own. It does not read a file
 and does not share the player's stream: a file is read at whatever rate the device
 asks for, while an instrument has to be paced by the device and given a note before
-the next buffer is due. Its voices go through the same rack, so the processors are
-its effects section, and a stage switched out of the path is out of the instrument
-too.
+the next buffer is due. Its voices go through the same rack, so the six processors
+and the twelve effects are its effects section, and a stage switched out of the path
+is out of the instrument too.
 
 - **Sixteen voices, two oscillators each.** PolyBLEP saw and square, triangle and
   sine, a wavetable oscillator, a sub an octave down and noise, with up to eight
@@ -151,11 +161,15 @@ too.
 - **Tunings.** Equal, just major, Pythagorean, meantone, 19-, 22-, 31- and 53-EDO,
   or a Scala `.scl` file. The offset is applied to the key itself, before the
   glide, so a scale is the key's pitch rather than an effect after it.
-- **Three ways to play it.** The page's keyboard — three octaves, where a drag
-  across the keys plays every key it crosses and two fingers can hold two notes —
-  the QWERTY row with Z and X moving it an octave, or MIDI: note on and off, pitch
-  bend, CC 1, all-notes-off, polyphonic aftertouch and channel pressure. An MPE
-  controller's member channels bend and press their own note rather than the whole
+- **Three ways to play it.** The page's keyboard draws the two octaves the letters
+  play, C3 to C5 by default, where a drag across the keys plays every key it crosses
+  and two fingers can hold two notes. The QWERTY row is laid out like a piano rather
+  than as a chromatic ladder — Z X C V B N M walk the first octave's white keys with
+  S D G H J above them for its sharps, Q W E R T Y U play the second octave, and `-`
+  and `=` move the bed an octave without sounding. MIDI reads note on and off, pitch
+  bend, CC 1, all-notes-off, polyphonic aftertouch and channel pressure, with MPE
+  zones whose member counts and bend ranges are settings rather than assumptions: an
+  MPE controller's member channels bend and press their own note instead of the whole
   keyboard.
 - **A take, and a bounce.** Notes are timestamped on the audio thread and rebased
   to the first one; a bounce renders the same engine offline over the take, runs
@@ -169,11 +183,32 @@ too.
   Devices page names. Choosing another one while it runs reopens the stream there,
   and the notes being held end with the old stream because nothing is carrying
   them any more.
-- **Patches.** Eight factory patches and your own, saved with the patch book in
-  `%APPDATA%\AUDIORIUM\synth.json`, which is a separate file from the chain's
-  settings so neither part of the app rewrites the other's.
+- **Patches.** Eight starting points are written into the engine, and 536 factory
+  packs of four patches each sit beside them on the Presets page. The loaded patch,
+  its name and your saved copies live in `%APPDATA%\AUDIORIUM\synth.json`, a separate
+  file from the chain's settings so neither part of the app rewrites the other's.
 
 ![The Synth page with a chord held](screenshots/synth.png)
+
+## Factory presets
+
+The Presets page is the instrument's shelf: 536 packs and 2,144 patches before the
+ones you save. A pack is a seed rather than four typed-out patches — a family (bass,
+sub, lead, pluck, keys, pad, drone, brass, stab, mallet, bells, texture), one
+character value and four names — and the builder shapes the family's voice with that
+character, then takes it four ways: the pack's own patch, a softer one, a harder one
+and one that moves. The four belong together without being copies, and the same seed
+sounds the same on every launch.
+
+Two hundred of the packs are curated. The other 336 fill a grid: every family wearing
+each of the engine's four oscillator shapes and each of its seven filter models, once,
+named for the coordinates it came from. The page lists the shelf by family, with a
+search that reads names, families and the patches inside, a count per family, and a
+coverage strip counted from the packs themselves rather than claimed by the layout. A
+card's patch loads into the running engine, and the Synth header names the patch and
+the pack it came from.
+
+![The presets shelf, with a patch loaded](screenshots/presets.png)
 
 ## Mastering
 
@@ -274,9 +309,12 @@ comes back sample-identical when the rack is out. On the instrument it counts wh
 playing a note produces — A4 at 440 Hz, an octave doubling, a bend landing where it
 should, forty note-ons never exceeding sixteen voices, the same take rendering the
 same frames twice, every tuning naming 128 finite cents — and that each filter
-model stays finite at full resonance. The frontend suite covers the scene's
-geometry, the readings it derives from the engine, the delivery-target check, the
-synthesizer's own voice maths and keyboard, and the workspace components.
+model stays finite at full resonance. On the shelf it holds every family, oscillator
+shape and filter cell of the grid exactly once, every pack and patch id round-trip,
+and every patch playing the shape and filter it is named for. The frontend suite
+covers the scene's geometry, the readings it derives from the engine, the
+delivery-target check, the synthesizer's own voice maths and keyboard, the pack
+search and counts, and the workspace components.
 
 ## Where your data goes
 
@@ -305,9 +343,10 @@ to `Synth` in the library, where the scan picks it up as a track.
 ```
 src/                          React frontend: workspaces, instruments, scene
 src-tauri/src/                Rust: decoder, spatial renderer, six processors,
-                              synth engine and MIDI, analysis, programme
-                              loudness, offline render and export, capture,
-                              devices, library, settings
+                              twelve effects, the synth engine, its pack
+                              catalogue and MIDI, analysis, programme loudness,
+                              offline render and export, capture, devices,
+                              library, settings
 src-tauri/assets/corrections/ published headphone profiles and their sources
 tools/                        the scripts that fitted the two LAN 2 profiles
 docs/                         audio architecture, dependency and license record,
@@ -325,10 +364,12 @@ docs/                         audio architecture, dependency and license record,
 - The queue is the scanned folder order held in memory: no playlists, no gapless
   playback, no resume point and no play counts.
 - There is no convolution, no VST hosting, no multiband compression and no
-  spectrogram of a live stream. The compressor is single-band, the saturator is
-  not an amplifier model, and nothing here is a true-peak limiter: the limiter
-  holds sample peaks, so a master's true peak can sit above what it held, which is
-  exactly what the Master page measures.
+  spectrogram of a live stream. The twelve additional effects are one bank in a
+  fixed order before the limiter, not twelve more strips that can be moved around
+  the rack. The compressor is single-band, the saturator is not an amplifier model,
+  and nothing here is a true-peak limiter: the limiter holds sample peaks, so a
+  master's true peak can sit above what it held, which is exactly what the Master
+  page measures.
 - The instrument has no sequencer, no arpeggiator, no plugin hosting and no
   multisampling, and there is no editor for a wavetable's frames or a spectral
   warp. Its MIDI path is covered by message tests and has not been played on a

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, AudioWaveform, Boxes, Disc3, Headphones, Home, Piano, SlidersHorizontal, SlidersVertical, Stamp } from 'lucide-react';
+import { Activity, AudioWaveform, Boxes, Disc3, Headphones, Home, Layers, Piano, SlidersHorizontal, SlidersVertical, Stamp } from 'lucide-react';
 import { AlbumGlobe } from './components/AlbumGlobe';
 import { AudioInspector } from './components/AudioInspector';
 import { PlayerBar } from './components/PlayerBar';
@@ -20,23 +20,28 @@ import { SignalChainPage } from './pages/SignalChainPage';
 import { ProcessorsPage } from './pages/ProcessorsPage';
 import { EqualiserPage } from './pages/EqualiserPage';
 import { SynthPage } from './pages/SynthPage';
+import { PresetsPage } from './pages/PresetsPage';
 import { MasterPage } from './pages/MasterPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { LibraryPage } from './pages/LibraryPage';
 
-const nav: { name: Workspace; label: string; icon: typeof Home; group: 'Explore' | 'System' }[] = [
+const nav: { name: Workspace; label: string; icon: typeof Home; group: 'Explore' | 'Processing' | 'System' }[] = [
+  // Explore is what the engine is doing with what is playing; Processing is the path
+  // from the instrument to the master, in the order the audio takes it.
   { name: 'Orbit', label: 'Observatory', icon: Home, group: 'Explore' },
   { name: 'Spatial', label: 'Spatial field', icon: Boxes, group: 'Explore' },
   { name: 'Spectrum', label: 'Analysis', icon: Activity, group: 'Explore' },
-  { name: 'Flow', label: 'Signal chain', icon: SlidersHorizontal, group: 'Explore' },
-  { name: 'Processors', label: 'Processors', icon: SlidersVertical, group: 'Explore' },
-  { name: 'Eq', label: 'Equaliser', icon: AudioWaveform, group: 'Explore' },
-  { name: 'Synth', label: 'Synth', icon: Piano, group: 'Explore' },
-  { name: 'Master', label: 'Master', icon: Stamp, group: 'Explore' },
+  { name: 'Flow', label: 'Signal chain', icon: SlidersHorizontal, group: 'Processing' },
+  { name: 'Processors', label: 'Processors', icon: SlidersVertical, group: 'Processing' },
+  { name: 'Eq', label: 'Equaliser', icon: AudioWaveform, group: 'Processing' },
+  { name: 'Synth', label: 'Synth', icon: Piano, group: 'Processing' },
+  // The packs are the instrument's shelf: they load into it, so they sit beside it.
+  { name: 'Presets', label: 'Presets', icon: Layers, group: 'Processing' },
+  { name: 'Master', label: 'Master', icon: Stamp, group: 'Processing' },
   { name: 'Library', label: 'Library', icon: Disc3, group: 'System' },
   { name: 'Devices', label: 'Devices', icon: Headphones, group: 'System' },
 ];
-const groups = ['Explore', 'System'] as const;
+const groups = ['Explore', 'Processing', 'System'] as const;
 
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace>('Orbit');
@@ -96,6 +101,7 @@ export function App() {
         {workspace === 'Processors' && <ProcessorsPage chain={chain} onOpenEq={() => setWorkspace('Eq')} />}
         {workspace === 'Eq' && <EqualiserPage chain={chain} />}
         {workspace === 'Synth' && <SynthPage synth={synth} libraryRoot={library.result?.root ?? ''} chain={chain.chain} onOpenProcessors={() => setWorkspace('Processors')} onOpenEq={() => setWorkspace('Eq')} />}
+        {workspace === 'Presets' && <PresetsPage synth={synth} onOpenSynth={() => setWorkspace('Synth')} />}
         {workspace === 'Master' && <MasterPage library={library} player={player} chain={chain} render={render} />}
         {workspace === 'Library' && <LibraryPage library={library} player={player} />}
         {workspace === 'Devices' && <DevicesPage audio={analysis} error={player.error} />}

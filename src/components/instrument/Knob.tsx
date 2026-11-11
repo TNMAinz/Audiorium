@@ -20,6 +20,8 @@ interface Props {
   disabled?: boolean;
   /** Longer text for assistive technology, if the label needs it. */
   description?: string;
+  /** Shown under the knob when the accessible name has to be longer than the face allows. */
+  caption?: string;
   /**
    * A control that runs on a transformed scale (a logarithm, say) still has to
    * announce the values it means. These are what assistive tech reads; the
@@ -35,7 +37,7 @@ interface Props {
  */
 export function Knob({
   label, value, min, max, step, format, onChange, reset, ticks = [], bipolar = false,
-  size = 52, disabled = false, description, announced,
+  size = 52, disabled = false, description, announced, caption,
 }: Props) {
   const drag = useRef<{ startValue: number; startY: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -127,7 +129,7 @@ export function Knob({
         <circle className="knob-cap" cx={centre} cy={centre} r={radius * 0.3} />
       </svg>
     </div>
-    <span className="knob-label">{label}</span>
+    <span className="knob-label">{caption ?? label}</span>
     <span className="knob-readout mono">{format(value)}</span>
     <span className="sr-only">{`${label} at ${Math.round(knobFraction(value, min, max) * 100)} percent of range`}</span>
   </div>;

@@ -24,7 +24,7 @@ export function formatGain(gain: number) {
   return `${Math.round(gain * 100)} % · ${Number.isFinite(db) ? `${db > 0 ? '+' : '−'}${Math.abs(db).toFixed(1)} dB` : '−∞ dB'}`;
 }
 
-export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Processors' | 'Eq' | 'Synth' | 'Master' | 'Spatial' | 'Library' | 'Devices';
+export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Processors' | 'Eq' | 'Synth' | 'Presets' | 'Master' | 'Spatial' | 'Library' | 'Devices';
 export type Theme = 'Ion' | 'Violet' | 'Ember';
 
 export const workspaces: Record<Workspace, { label: string; title: string; description: string }> = {
@@ -34,6 +34,7 @@ export const workspaces: Record<Workspace, { label: string; title: string; descr
   Processors: { label: 'Processors', title: 'Processors', description: 'The six processors, in the order the audio reaches them.' },
   Eq: { label: 'Equaliser', title: 'Equaliser', description: 'The parametric bands the audio path is running.' },
   Synth: { label: 'Synth', title: 'Synth', description: 'Two oscillators with unison and wavetables, five filter models, a modulation matrix and the rack, played from a keyboard.' },
+  Presets: { label: 'Presets', title: 'Presets', description: 'The factory packs: 536 collections of four patches each, every family crossed with every oscillator shape and filter.' },
   Master: { label: 'Master', title: 'Master', description: 'Export a file through the rack, and measure it before and after.' },
   Spatial: { label: 'Spatial field', title: 'Spatial field', description: 'The virtual speakers the renderer is using.' },
   Library: { label: 'Library', title: 'Library', description: 'Local files, decoded in the app.' },
@@ -187,6 +188,9 @@ export interface CompressorSettings {
   attackMs: number; releaseMs: number; kneeDb: number; makeupDb: number;
 }
 export interface SaturatorSettings { enabled: boolean; driveDb: number; tone: number; mix: number }
+export interface EffectSettings { enabled: boolean; amount: number; rate: number; feedback: number; mix: number }
+export const effectNames = ['Delay', 'Chorus', 'Flanger', 'Phaser', 'Bitcrusher', 'Distortion', 'Tremolo', 'Auto-filter', 'Stereo widener', 'Ring modulation', 'Frequency shift', 'Noise gate'] as const;
+export const defaultEffect: EffectSettings = { enabled: false, amount: 0.5, rate: 0.5, feedback: 0.25, mix: 0.5 };
 export interface ChainSettings {
   /** The rack, first processor first: the order the audio actually travels. */
   order: StageId[];
@@ -194,6 +198,7 @@ export interface ChainSettings {
   stereoMode: StereoMode;
   panner: PannerSettings; reverb: ReverbSettings; eq: EqSettings;
   compressor: CompressorSettings; saturator: SaturatorSettings; limiter: LimiterSettings;
+  effects: EffectSettings[];
 }
 export interface ChainMeters {
   gainReductionDb: number; outputPeakDb: number; wetMix: number; compressorReductionDb: number;
@@ -235,6 +240,7 @@ export const defaultChain: ChainSettings = {
   compressor: { enabled: false, thresholdDb: -20, ratio: 3, attackMs: 10, releaseMs: 200, kneeDb: 6, makeupDb: 0 },
   saturator: { enabled: false, driveDb: 6, tone: 0.5, mix: 1 },
   limiter: { enabled: false, thresholdDb: -3, ceilingDb: -0.3, release: 'medium', detector: 'both', softClip: false, autoMakeup: true },
+  effects: effectNames.map(() => ({ ...defaultEffect })),
 };
 export const idleMeters: ChainMeters = {
   gainReductionDb: 0, outputPeakDb: -120, wetMix: 0, compressorReductionDb: 0,
@@ -325,7 +331,7 @@ export type SynthWave = 'saw' | 'square' | 'triangle' | 'sine' | 'table';
 export type SynthFilterKind = 'lowpass' | 'bandpass' | 'highpass' | 'ladder' | 'comb' | 'notch' | 'peak';
 export type LfoTarget = 'pitch' | 'filter' | 'amp';
 export type LfoWave = 'sine' | 'triangle';
-export type ModSource = 'lfo1' | 'lfo2' | 'env1' | 'env2' | 'velocity' | 'key' | 'wheel' | 'pressure'
+export type ModSource = 'lfo1' | 'lfo2' | 'env1' | 'env2' | 'velocity' | 'key' | 'wheel' | 'pressure' | 'timbre'
   | 'macro1' | 'macro2' | 'macro3' | 'macro4';
 export type ModTarget = 'pitch' | 'cutoff' | 'resonance' | 'osc1' | 'osc2' | 'sub' | 'noise' | 'pan';
 /** How a source's travel is bent before it reaches the destination. */
@@ -420,7 +426,7 @@ export const modSources: { id: ModSource; label: string }[] = [
   { id: 'lfo1', label: 'LFO 1' }, { id: 'lfo2', label: 'LFO 2' },
   { id: 'env1', label: 'Amp env' }, { id: 'env2', label: 'Filter env' },
   { id: 'velocity', label: 'Velocity' }, { id: 'key', label: 'Key' }, { id: 'wheel', label: 'Wheel' },
-  { id: 'pressure', label: 'Pressure' },
+  { id: 'pressure', label: 'Pressure' }, { id: 'timbre', label: 'MPE timbre' },
   { id: 'macro1', label: 'Macro 1' }, { id: 'macro2', label: 'Macro 2' },
   { id: 'macro3', label: 'Macro 3' }, { id: 'macro4', label: 'Macro 4' },
 ];
@@ -455,8 +461,24 @@ export const idleSynthStatus: SynthStatus = {
 export interface SynthScale { name: string; cents: number[] }
 
 export interface SynthPresetSummary { id: string; name: string; builtin: boolean }
-export interface SynthPatchList { patch: SynthPatch; active: string | null; presets: SynthPresetSummary[]; tables: string[] }
-export const emptySynthPatches: SynthPatchList = { patch: defaultSynth, active: null, presets: [], tables: [] };
+/** One patch of a pack: an id to load, and the name a card prints. */
+export interface SynthPackPatch { id: string; name: string }
+export interface SynthPack { id: string; name: string; family: string; blurb: string; patches: SynthPackPatch[] }
+/** One axis of the shelf: how much of it the catalogue actually holds. */
+export interface SynthCoverageRow { label: string; covered: number; total: number }
+/**
+ * What the shelf covers, counted by the engine from the packs it ships rather than
+ * from a number written into the page. The grid is the systematic half: every family
+ * crossed with every oscillator pair and every filter.
+ */
+export interface SynthCoverage { rows: SynthCoverageRow[]; gridPacks: number; gridPatches: number }
+export interface SynthPackCatalogue { families: string[]; packs: SynthPack[]; coverage: SynthCoverage }
+export const emptyCoverage: SynthCoverage = { rows: [], gridPacks: 0, gridPatches: 0 };
+export const emptyPackCatalogue: SynthPackCatalogue = { families: [], packs: [], coverage: emptyCoverage };
+export interface MpeSettings { lowerMembers: number; upperMembers: number; memberBend: number; masterBend: number }
+export const defaultMpe: MpeSettings = { lowerMembers: 0, upperMembers: 0, memberBend: 48, masterBend: 2 };
+export interface SynthPatchList { patch: SynthPatch; active: string | null; presets: SynthPresetSummary[]; tables: string[]; mpe: MpeSettings }
+export const emptySynthPatches: SynthPatchList = { patch: defaultSynth, active: null, presets: [], tables: [], mpe: defaultMpe };
 
 /** "C4": the name every keyboard uses, from the MIDI number. */
 export function noteName(note: number): string {
