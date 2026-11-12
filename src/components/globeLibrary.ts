@@ -52,7 +52,6 @@ export function showsLibraryInvite(count: number, busy: boolean, error: string, 
 }
 
 export const COVER_COLUMN = 0.135;
-export const COVER_WIDTH = 0.09;
 const REACH = 4.2;
 /** How far the shelf falls away towards its ends, in screen heights. */
 const ARC = 0.02;

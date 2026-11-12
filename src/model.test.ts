@@ -1,14 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { defaultChain, defaultOrder, defaultSynth, describeSynth, idleSynthStatus, isStageOrder, moveStage, themes, workspaces } from './model';
+import { defaultChain, defaultOrder, defaultSynth, describeSynth, idleSynthStatus, isStageOrder, moveStage, themes } from './model';
 
-describe('workspace and scene configuration', () => {
-  it('defines accessible copy for every navigation destination', () => {
-    expect(Object.keys(workspaces)).toEqual(['Orbit', 'Spectrum', 'Flow', 'Processors', 'Eq', 'Synth', 'Presets', 'Master', 'Spatial', 'Library', 'Devices']);
-    for (const item of Object.values(workspaces)) {
-      expect(item.title.length).toBeGreaterThan(0);
-      expect(item.description.length).toBeGreaterThan(0);
-    }
-  });
+describe('rack and theme configuration', () => {
   it('keeps every processor in the rack when one is moved', () => {
     const moved = moveStage(defaultOrder, 0, 2);
     expect(moved).toEqual(['reverb', 'eq', 'panner', 'compressor', 'saturator', 'limiter']);

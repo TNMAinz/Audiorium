@@ -1,23 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { defaultChain, idleMeters, workspaces, type ChainMeters, type ChainSettings, type PlaybackStatus } from '../model';
-import type { AnalysisStatus } from '../useAnalysis';
+import { idleMeters, type ChainMeters } from '../model';
 import {
-  engagedStages, formatClock, formatLevel, levelDb, loudestBand, partById,
-  sceneParts, spectrumHz, trackFraction, type ScenePartId,
+  engagedStages, formatClock, formatLevel, levelDb, loudestBand,
+  spectrumHz, trackFraction,
 } from './observatory';
-
-const idleStatus: AnalysisStatus = {
-  playing: false, source: 'playback', paused: false, format: '48 kHz · 32-bit float · stereo',
-  rms: 0, peak: 0, low: 0, mid: 0, high: 0, correlation: 0, balance: 0,
-  vectorscope: [], spectrum: [],
-};
-
-const idlePlayback: PlaybackStatus = {
-  active: false, playing: false, finished: false, title: '', artist: '', album: '', path: '',
-  format: '', device: '', position: 0, duration: 0, volume: 0.7, spatial: '', error: null,
-};
-
-const sound = (patch: Partial<AnalysisStatus> = {}): AnalysisStatus => ({ ...idleStatus, ...patch });
 
 describe('levels as the meters show them', () => {
   it('reads a magnitude as dBFS, with a floor instead of minus infinity', () => {
@@ -66,72 +52,12 @@ describe('where the track is on its orbit', () => {
   });
 });
 
-describe('what the object says when nothing is running', () => {
-  const parts = sceneParts({ analysis: idleStatus, chain: defaultChain, meters: idleMeters, playback: idlePlayback });
-
-  it('admits the engine has written nothing rather than drawing a floor', () => {
-    expect(partById(parts, 'programme')?.value).toBe('Nothing written');
-    expect(partById(parts, 'spectrum')?.value).toBe('Flat · no frames');
-    expect(partById(parts, 'track')?.value).toBe('Nothing loaded');
-  });
-  it('reports the bypassed stages as bypassed, with their settings still visible', () => {
-    expect(partById(parts, 'equaliser')?.value).toBe('Bypassed');
-    expect(partById(parts, 'panner')?.engaged).toBe(false);
-    expect(partById(parts, 'panner')?.value).toBe('Bypassed · width 25 %');
-    expect(partById(parts, 'limiter')?.value).toBe('Bypassed · threshold −3.0 dB');
+describe('how many processors the engine is running', () => {
+  it('counts the stages a bypassed rack leaves off', () => {
     expect(engagedStages(idleMeters)).toBe(0);
   });
-  it('gives every part a page that exists and an explanation', () => {
-    for (const part of parts) {
-      expect(Object.keys(workspaces)).toContain(part.action);
-      expect(part.detail.length).toBeGreaterThan(20);
-    }
-    expect(parts.map(part => part.id)).toEqual<ScenePartId[]>([
-      'programme', 'spectrum', 'equaliser', 'panner', 'room', 'limiter', 'track',
-    ]);
-  });
-});
-
-describe('what the object says while it plays', () => {
-  const spectrum = Array.from({ length: 56 }, (_, at) => (at === 40 ? 0.95 : 0.05));
-  const playing = sound({ playing: true, rms: 0.12, peak: 0.5, correlation: 0.5, balance: -0.2, spectrum });
-  const meters: ChainMeters = { ...idleMeters, eqEnabled: true, limiterEnabled: true, gainReductionDb: -3.2 };
-  const chain: ChainSettings = {
-    ...defaultChain,
-    eq: { enabled: true, preampDb: -2, filters: [
-      { kind: 'peaking', frequency: 100, gainDb: 3, q: 1, enabled: true },
-      { kind: 'peaking', frequency: 3_000, gainDb: -2, q: 1, enabled: true },
-    ] },
-  };
-  const parts = sceneParts({ analysis: playing, chain, meters, playback: { ...idlePlayback, active: true, playing: true, title: 'Says', position: 64, duration: 200 } });
-
-  it('reads the level the engine measured', () => {
-    expect(partById(parts, 'programme')?.value).toBe('−18.4 dBFS RMS · peak −6.0 dBFS');
-  });
-  it('names the loudest band of the measured spectrum', () => {
-    expect(partById(parts, 'spectrum')?.value).toMatch(/^loudest \d/);
-    expect(partById(parts, 'spectrum')?.value).toContain('56 log bands');
-  });
-  it('describes the running equaliser, panner, room and limiter', () => {
-    expect(partById(parts, 'equaliser')?.value).toBe('2 bands · preamp −2.0 dB');
-    expect(partById(parts, 'limiter')?.value).toBe('−3.2 dB of reduction');
+  it('counts only the enabled ones', () => {
+    const meters: ChainMeters = { ...idleMeters, eqEnabled: true, limiterEnabled: true };
     expect(engagedStages(meters)).toBe(2);
-    expect(partById(parts, 'track')?.value).toBe('1:04 / 3:20 · Says');
-  });
-  it('says a limiter that is not working is not reducing', () => {
-    const resting = sceneParts({ analysis: playing, chain, meters: { ...meters, gainReductionDb: 0 }, playback: idlePlayback });
-    expect(partById(resting, 'limiter')?.value).toBe('Not reducing · threshold −3.0 dB');
-  });
-  it('keeps a held reading when the track is paused', () => {
-    const paused = sceneParts({ analysis: { ...playing, playing: false, paused: true }, chain, meters, playback: idlePlayback });
-    expect(partById(paused, 'programme')?.value).toContain('Held ·');
-  });
-});
-
-describe('focus', () => {
-  const parts = sceneParts({ analysis: idleStatus, chain: defaultChain, meters: idleMeters, playback: idlePlayback });
-  it('resolves a part by id and nothing by no id', () => {
-    expect(partById(parts, 'equaliser')?.label).toBe('Equaliser');
-    expect(partById(parts, null)).toBeNull();
   });
 });

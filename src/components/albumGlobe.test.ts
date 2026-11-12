@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ART_CACHE_LIMIT, COVER_COLUMN, COVER_WIDTH, COVER_WINDOW, FLING_MAX, FLING_MIN, WHEEL_PIXELS_PER_TRACK, circularDistance, clampFling, coverLayout, coverWindow, dragCursor, dragVelocity, easeCursor, flingStep, shelfMoving, showsLibraryInvite, wheelSteps, wrapCursor } from './globeLibrary';
+import { ART_CACHE_LIMIT, COVER_COLUMN, COVER_WINDOW, FLING_MAX, FLING_MIN, WHEEL_PIXELS_PER_TRACK, circularDistance, clampFling, coverLayout, coverWindow, dragCursor, dragVelocity, easeCursor, flingStep, shelfMoving, showsLibraryInvite, wheelSteps, wrapCursor } from './globeLibrary';
 
 describe('the album globe library window', () => {
   it('wraps at both ends without duplicating small libraries', () => {
@@ -45,7 +45,6 @@ describe('the album globe library window', () => {
     expect(wrapCursor(0 + wheelSteps(0, -100).steps, 3)).toBe(2);
   });
   it('never places neighbouring covers closer than their own width', () => {
-    expect(COVER_COLUMN).toBeGreaterThan(COVER_WIDTH * 1.25);
     for (const count of [7, 9, 11, 45, 5000]) {
       for (let cursor = 0; cursor < Math.min(count, 60); cursor++) {
         const window = coverWindow(count, cursor);

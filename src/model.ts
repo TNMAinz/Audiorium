@@ -27,20 +27,6 @@ export function formatGain(gain: number) {
 export type Workspace = 'Orbit' | 'Spectrum' | 'Flow' | 'Processors' | 'Eq' | 'Synth' | 'Presets' | 'Master' | 'Spatial' | 'Library' | 'Devices';
 export type Theme = 'Ion' | 'Violet' | 'Ember';
 
-export const workspaces: Record<Workspace, { label: string; title: string; description: string }> = {
-  Orbit: { label: 'Observatory', title: 'Observatory', description: 'The scene, driven by what you are playing.' },
-  Spectrum: { label: 'Analysis', title: 'Analysis', description: 'Levels and spectrum of what leaves the app.' },
-  Flow: { label: 'Signal chain', title: 'Signal chain', description: 'Every stage between the decoded file and the output.' },
-  Processors: { label: 'Processors', title: 'Processors', description: 'The six processors, in the order the audio reaches them.' },
-  Eq: { label: 'Equaliser', title: 'Equaliser', description: 'The parametric bands the audio path is running.' },
-  Synth: { label: 'Synth', title: 'Synth', description: 'Two oscillators with unison and wavetables, five filter models, a modulation matrix and the rack, played from a keyboard.' },
-  Presets: { label: 'Presets', title: 'Presets', description: 'The factory packs: 536 collections of four patches each, every family crossed with every oscillator shape and filter.' },
-  Master: { label: 'Master', title: 'Master', description: 'Export a file through the rack, and measure it before and after.' },
-  Spatial: { label: 'Spatial field', title: 'Spatial field', description: 'The virtual speakers the renderer is using.' },
-  Library: { label: 'Library', title: 'Library', description: 'Local files, decoded in the app.' },
-  Devices: { label: 'Devices', title: 'Devices', description: 'Output devices and their roles.' },
-};
-
 export type SpatialMode = 'stereo' | 'surround51' | 'surround71' | 'atmos' | 'binaural' | 'custom';
 export interface SpatialSettings { mode: SpatialMode; width: number; crossfeed: number; height: number; rotation: number }
 

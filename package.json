@@ -1,6 +1,6 @@
 {
   "name": "audiorium",
-  "version": "2.6.0",
+  "version": "2.6.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,6 @@
     "sign": "powershell -NoProfile -ExecutionPolicy Bypass -File src-tauri/sign.ps1"
   },
   "dependencies": {
-    "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
     "@tauri-apps/api": "^2.12.4",
     "lucide-react": "^1.62.0",

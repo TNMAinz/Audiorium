@@ -36,7 +36,6 @@ triggered. The licence text ships with the crate.
 | `react`, `react-dom` | 19.3 | MIT | Interface |
 | `three` | 0.186 | MIT | Observatory geometry and shaders |
 | `@react-three/fiber` | 9.8 | MIT | React renderer for three |
-| `@react-three/drei` | 10.7 | MIT | Scene helpers |
 | `@tauri-apps/api` | 2.12 | MIT OR Apache-2.0 | `invoke`, window controls |
 | `lucide-react` | 1.62 | ISC | Icons |
 | `vite`, `vitest`, `typescript`, `@vitejs/plugin-react` | current | MIT | Build and test only, not shipped |

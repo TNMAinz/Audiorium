@@ -95,9 +95,6 @@ export function settledCutoff(patch: SynthPatch, note: number): number {
   return patch.filter.cutoff * 2 ** (key + sweep);
 }
 
-/** The engine's resonance mapping: a fifth of the range is already ringing. */
-export const filterQ = (resonance: number) => 0.5 + resonance * 9.5;
-
 export interface VoiceTrace {
   /** One sample a column, in frames. */
   osc1: number[];

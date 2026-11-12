@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { noteName } from '../../model';
+import { slideNote } from './slide';
 
 export interface KeyboardProps {
   /** MIDI note of the leftmost white key; always a C. */
@@ -134,9 +135,13 @@ export function Keyboard({
 
   // A pointer on the keys is a finger on a real keyboard: pressing one starts it,
   // and dragging moves that note to whatever key is under the cursor, releasing the
-  // one it left. Each pointer is tracked on its own, so a touch screen can hold one
-  // note and slide another without either letting go of the first.
-  const pointers = useRef(new Map<number, number>());
+  // one it left. A pointer that slides off the keys keeps its place on the bed until
+  // it is let go — its entry goes null rather than away — so a drag that travels over
+  // the gap between two keys, off the edge of the bed or onto the panel below comes
+  // back playing instead of going silent for the rest of the hold. Each pointer is
+  // tracked on its own, so a touch screen can hold one note and slide another without
+  // either letting go of the first.
+  const pointers = useRef(new Map<number, number | null>());
 
   /** The note under a point, or null when the point is on no key at all. */
   const noteAt = useCallback((clientX: number, clientY: number) => {
@@ -149,14 +154,11 @@ export function Keyboard({
 
   /** Sounds `note` for one pointer, releasing what that same pointer held before. */
   const slide = useCallback((pointerId: number, note: number | null) => {
-    const current = pointers.current.get(pointerId);
-    if (current === note) return;
-    if (current !== undefined) onNoteOff(current);
-    if (note === null) pointers.current.delete(pointerId);
-    else {
-      pointers.current.set(pointerId, note);
-      onNoteOn(note, 0.85);
-    }
+    const change = slideNote(pointers.current.get(pointerId), note);
+    if (!change) return;
+    if (change.off !== null) onNoteOff(change.off);
+    pointers.current.set(pointerId, change.on);
+    if (change.on !== null) onNoteOn(change.on, 0.85);
   }, [onNoteOn, onNoteOff]);
 
   useEffect(() => {
@@ -166,9 +168,12 @@ export function Keyboard({
     };
     // A release outside the keys, or a cancelled pointer, still ends the note the
     // drag started: nothing is left ringing because the cursor travelled off the bed.
+    // This is the only place a pointer leaves the map, because the release is the only
+    // thing that ends a drag.
     const end = (event: PointerEvent) => {
       if (!pointers.current.has(event.pointerId)) return;
       slide(event.pointerId, null);
+      pointers.current.delete(event.pointerId);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', end);
@@ -177,7 +182,7 @@ export function Keyboard({
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', end);
       window.removeEventListener('pointercancel', end);
-      pointers.current.forEach(note => onNoteOff(note));
+      pointers.current.forEach(note => { if (note !== null) onNoteOff(note); });
       pointers.current.clear();
     };
   }, [noteAt, slide, onNoteOff]);

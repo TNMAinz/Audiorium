@@ -1,38 +1,13 @@
 /**
- * What the Observatory says, kept pure so every line can be checked without WebGL.
+ * The readings the Observatory is drawn from, kept pure so every number can be
+ * checked without WebGL.
  *
- * The scene's shapes are decoration unless each one reports something. This module
- * turns the readings the app already has into the words the object is labelled with:
- * one part per thing you can see, each with the engine's own numbers and the page
- * that explains it further. Nothing here invents a value: an idle engine says so,
- * a bypassed stage says so, and a held reading says it is held.
+ * The scene's shapes are decoration unless each one reports something, so the
+ * conversions the drawing depends on — a level as dBFS, a clock, a band's frequency,
+ * the track's place on its orbit, what is running — live here and are tested alone.
+ * Nothing here invents a value: an idle engine has a floor, not a reading.
  */
-import {
-  describeEq, formatDb, formatHz, reverbTime,
-  type ChainMeters, type ChainSettings, type PlaybackStatus, type Workspace,
-} from '../model';
-import type { AnalysisStatus } from '../useAnalysis';
-
-export type ScenePartId =
-  | 'programme' | 'spectrum' | 'equaliser' | 'panner' | 'room' | 'limiter' | 'track';
-
-/** The four processors, in the order the signal passes them. */
-export const stageIds = ['equaliser', 'panner', 'room', 'limiter'] as const;
-export type StageId = (typeof stageIds)[number];
-
-export interface ScenePart {
-  id: ScenePartId;
-  /** The part's name, as the object shows it. */
-  label: string;
-  /** The live reading, in one line. */
-  value: string;
-  /** What this part of the object is measuring, for a reader who wants the why. */
-  detail: string;
-  /** Where the full story lives; every part has one. */
-  action: Workspace;
-  /** True for a processor the engine is running, false for a bypassed one. */
-  engaged: boolean;
-}
+import { formatDb, type ChainMeters } from '../model';
 
 /** The floor the level meter uses, so silence has a number instead of −Infinity. */
 export const LEVEL_FLOOR_DB = -60;
@@ -92,113 +67,4 @@ export function trackFraction(position: number, duration: number): number {
 export function engagedStages(meters: ChainMeters): number {
   return [meters.eqEnabled, meters.pannerEnabled, meters.reverbEnabled, meters.limiterEnabled]
     .filter(Boolean).length;
-}
-
-const percent = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)} %`;
-const degrees = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.round(Math.abs(value))}°`;
-
-export interface SceneInput {
-  analysis: AnalysisStatus;
-  chain: ChainSettings;
-  meters: ChainMeters;
-  playback: PlaybackStatus;
-}
-
-/**
- * Every part of the object, with the reading it stands for. The order is the order
- * they are listed in the interface, not the drawing order.
- */
-export function sceneParts({ analysis, chain, meters, playback }: SceneInput): ScenePart[] {
-  const live = Boolean(analysis.playing);
-  const held = !live && Boolean(analysis.paused);
-  const strongest = live || held ? loudestBand(analysis.spectrum) : null;
-  const eq = chain.eq;
-  const bands = eq.filters.filter(filter => filter.enabled).length;
-  const reduction = Number.isFinite(meters.gainReductionDb) ? meters.gainReductionDb : 0;
-
-  return [
-    {
-      id: 'programme',
-      label: 'Programme',
-      value: live
-        ? `${formatLevel(analysis.rms)} RMS · peak ${formatLevel(analysis.peak)}`
-        : held ? `Held · ${formatLevel(analysis.rms)} RMS` : 'Nothing written',
-      detail: live
-        ? 'The frames leaving the app after the processors and the playback level, measured on the device side.'
-        : held
-          ? 'A pause keeps the last measured window: no new frame was written, so nothing moved.'
-          : 'The playback engine has written no frame, so there is no level to report.',
-      action: 'Spectrum',
-      engaged: live,
-    },
-    {
-      id: 'spectrum',
-      label: 'Spectrum',
-      value: strongest
-        ? `loudest ${formatHz(strongest.hz)} · ${analysis.spectrum.length} log bands`
-        : held ? 'Held · the window before the pause' : 'Flat · no frames',
-      detail: `One tick per logarithmic band, ${SPECTRUM_MIN_HZ} Hz to ${formatHz(SPECTRUM_MAX_HZ)}, folded from a real FFT of the output.`,
-      action: 'Spectrum',
-      engaged: Boolean(analysis.spectrum.length),
-    },
-    {
-      id: 'equaliser',
-      label: 'Equaliser',
-      value: meters.eqEnabled ? describeEq({ ...eq, enabled: true }) : describeEq({ ...eq, enabled: false }),
-      detail: bands
-        ? `${bands} ${bands === 1 ? 'band is' : 'bands are'} set; the curve is the engine's own, not a drawing of the sliders.`
-        : 'No band list is loaded; the stage is a straight wire either way.',
-      action: 'Eq',
-      engaged: meters.eqEnabled,
-    },
-    {
-      id: 'panner',
-      label: 'Position',
-      value: meters.pannerEnabled
-        ? `azimuth ${degrees(chain.panner.azimuth)} · width ${percent(chain.panner.width)}`
-        : `Bypassed · width ${percent(chain.panner.width)}`,
-      detail: chain.panner.room
-        ? 'The source is placed in a spherical head model with its early reflection fed back in.'
-        : 'The virtual source position applied to the stereo image, without the reflection.',
-      action: 'Flow',
-      engaged: meters.pannerEnabled,
-    },
-    {
-      id: 'room',
-      label: 'Room',
-      value: meters.reverbEnabled
-        ? `dry ${percent(chain.reverb.dry)} · wet ${percent(chain.reverb.wet)} · decay ${reverbTime(chain.reverb.decay)}`
-        : `Bypassed · wet ${percent(chain.reverb.wet)}`,
-      detail: 'The feedback network behind the room, as the engine is running it.',
-      action: 'Flow',
-      engaged: meters.reverbEnabled,
-    },
-    {
-      id: 'limiter',
-      label: 'Limiter',
-      value: !meters.limiterEnabled
-        ? `Bypassed · threshold ${formatDb(chain.limiter.thresholdDb)}`
-        : reduction < -0.05
-          ? `${formatDb(reduction)} of reduction`
-          : `Not reducing · threshold ${formatDb(chain.limiter.thresholdDb)}`,
-      detail: 'The gain the limiter is taking off to keep the output under its threshold.',
-      action: 'Flow',
-      engaged: meters.limiterEnabled,
-    },
-    {
-      id: 'track',
-      label: 'Track',
-      value: playback.active
-        ? `${formatClock(playback.position)} / ${formatClock(playback.duration)} · ${playback.title}`
-        : 'Nothing loaded',
-      detail: 'Where the loaded track is, carried around the outermost orbit.',
-      action: 'Library',
-      engaged: playback.active,
-    },
-  ];
-}
-
-/** The part a hovered or focused id names, or null when nothing is focused. */
-export function partById(parts: ScenePart[], id: ScenePartId | null): ScenePart | null {
-  return id ? parts.find(part => part.id === id) ?? null : null;
 }

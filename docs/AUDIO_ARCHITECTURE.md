@@ -341,13 +341,11 @@ before enough audio has arrived, and the UI shows a dash rather than a zero.
   and is memoised, so a poll cannot re-render the WebGL tree for a picture that
   did not change. It smooths every value it uses (`1 - exp(-dt * rate)`) before
   applying it, so a poll's step never becomes a jump in the picture.
-* The observatory shows that one measurement as one reading, and `sceneModes.ts`
-  owns its shape as plain data: the geodesic shell (icosahedron subdivided twice,
-  deduplicated edges). `OrbitScene` turns that array into buffers; it computes no
-  geometry of its own, which is why the shape can be tested without a WebGL
-  context. There is no mode switch, no strip or caption over the field, and no way
-  to hide the rail: the object and the instrument stack are always on screen
-  together, and the player bar reports what is playing.
+* The observatory shows the library as one object, and every part of it is drawn
+  from readings that same poll already carries. There is no mode switch, no strip
+  or caption over the field, and no way to hide the rail: the object and the
+  instrument stack are always on screen together, and the player bar reports what
+  is playing.
 * The engine's spectrum is the skin of one membrane orb, sitting between the core
   and the geodesic shell. Its 56 bands are written as one 56-byte row and sampled
   round the orb's longitude in the vertex shader, so the silhouette is the mix:

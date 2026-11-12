@@ -469,8 +469,3 @@ export function StereoField({ status }: { status: AnalysisStatus }) {
     <p className="panel-note">Ring = this window's loudest sample, in its own direction. +1 folds to mono; a needle left of centre cancels.</p>
   </div>;
 }
-
-export function InputHistory({ status }: { status: AnalysisStatus }) {
-  const values = status.playing && status.spectrum.length ? status.spectrum.slice(-32).map(value => Math.min(1, value * 1.4)) : Array(32).fill(0);
-  return <svg className="input-history" viewBox="0 0 256 48" preserveAspectRatio="none" role="img" aria-label={status.playing ? 'Recent spectrum energy' : 'No output history; playback stopped'}>{values.map((value, i) => <path key={i} d={`M${i * 8 + 2} ${24 - value * 23} V${24 + value * 23}`} stroke="#8fb9ed" strokeWidth="2" />)}</svg>;
-}

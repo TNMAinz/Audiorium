@@ -11,7 +11,7 @@ the source; nothing here is aspirational.
 | Desktop shell | Tauri 2, one undecorated window, 1440x900, minimum 760x600 | `src-tauri/tauri.conf.json` |
 | Backend | Rust 2021, single binary crate, no workspace | `src-tauri/Cargo.toml` |
 | Frontend | React 19, TypeScript, Vite 8, vitest | `package.json` |
-| 3D | three 0.186 + @react-three/fiber + drei, hand-written shader/geometry for the observatory | `src/components/OrbitScene.tsx` |
+| 3D | three 0.186 + @react-three/fiber, hand-written shader/geometry for the observatory | `src/components/OrbitScene.tsx` |
 | Styling | One stylesheet, custom properties, no UI framework | `src/styles.css` |
 | Icons | lucide-react | `package.json` |
 | Persistence | One settings file (chain + saved equaliser patches) in `%APPDATA%\AUDIORIUM\state.json`. No database yet | `src-tauri/src/store.rs` |
