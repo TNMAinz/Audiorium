@@ -272,10 +272,17 @@ kernel driver and is not part of this repository. The app works without it, and
 the Devices page still reports whether a build of the device is installed and
 running on the machine.
 
+## Installing it
+
+Each release on the [Releases page](https://github.com/TNMAinz/Audiorium/releases)
+carries `AUDIORIUM_<version>_x64-setup.exe`. It installs for the current user and
+needs no administrator. The build is unsigned, so Windows shows an
+unknown-publisher warning before it runs; the source is here if you would rather
+build it yourself.
+
 ## Building it
 
-No binaries are published here; the app is built from this source. You need, on
-Windows 10 or 11:
+You need, on Windows 10 or 11:
 
 - Node.js 24 and npm
 - a stable Rust toolchain with the MSVC target
