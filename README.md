@@ -275,10 +275,12 @@ running on the machine.
 ## Installing it
 
 Each release on the [Releases page](https://github.com/TNMAinz/Audiorium/releases)
-carries `AUDIORIUM_<version>_x64-setup.exe`. It installs for the current user and
-needs no administrator. The build is unsigned, so Windows shows an
-unknown-publisher warning before it runs; the source is here if you would rather
-build it yourself.
+carries `AUDIORIUM_<version>_x64_en-US.msi`. It installs for every user, so it asks
+for administrator, and puts `audiorium.exe` in `Program Files`, with a Start Menu
+entry and an entry in Apps & features. The MSI is the only installer built here:
+the NSIS setup that earlier releases carried is no longer produced. The build is
+unsigned, so Windows shows an unknown-publisher warning before it runs; the source
+is here if you would rather build it yourself.
 
 ## Building it
 
@@ -297,11 +299,15 @@ npm run tauri dev
 `npm run dev` alone serves the frontend on `127.0.0.1:1420` in a browser, which
 is useful for layout work; the native features report themselves as unavailable
 there. `npm run build` type-checks strictly and produces the frontend bundle.
-`npm run tauri build` produces `src-tauri/target/release/audiorium.exe` and two
-installers: an NSIS one under `src-tauri/target/release/bundle/nsis/` that installs
-for the current user and needs no administrator, and an MSI under
-`bundle/msi/` for a machine-wide install. Both carry the WebView2 bootstrapper, so
-a machine that is missing the runtime fetches it during setup instead of failing.
+`npm run tauri build` produces `src-tauri/target/release/audiorium.exe` and one
+installer, `bundle/msi/AUDIORIUM_<version>_x64_en-US.msi`, which installs for every
+user. It carries the WebView2 bootstrapper, so a machine that is missing the
+runtime fetches it during setup instead of failing. `bundle.targets` is `["msi"]`
+because the MSI is the artefact a release ships; adding `"nsis"` to that list
+produces the NSIS setup as well. The wizard is drawn from
+`src-tauri/wix/banner.bmp` (493×58) and `src-tauri/wix/dialog.bmp` (493×312), the
+24-bit bitmaps WiX requires, and a configured certificate signs the exe and the
+MSI as they are bundled through `src-tauri/sign.ps1`.
 
 ## Tests
 
