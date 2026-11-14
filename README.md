@@ -297,9 +297,11 @@ npm run tauri dev
 `npm run dev` alone serves the frontend on `127.0.0.1:1420` in a browser, which
 is useful for layout work; the native features report themselves as unavailable
 there. `npm run build` type-checks strictly and produces the frontend bundle.
-`npm run tauri build` produces `src-tauri/target/release/audiorium.exe` and an
-NSIS installer under `src-tauri/target/release/bundle/nsis/` that installs for
-the current user and needs no administrator.
+`npm run tauri build` produces `src-tauri/target/release/audiorium.exe` and two
+installers: an NSIS one under `src-tauri/target/release/bundle/nsis/` that installs
+for the current user and needs no administrator, and an MSI under
+`bundle/msi/` for a machine-wide install. Both carry the WebView2 bootstrapper, so
+a machine that is missing the runtime fetches it during setup instead of failing.
 
 ## Tests
 
