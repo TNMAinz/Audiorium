@@ -16,8 +16,12 @@ const MAX_TRACKS: usize = 5000;
 const MAX_DEPTH: usize = 12;
 /// The folder the master writer puts prints in; the scan leaves it alone.
 const MASTERED_FOLDER: &str = crate::render::MASTERED_FOLDER;
-/// Leading metadata is always at the start of the file, so only the head is read.
+/// Leading metadata is always at the start of the file, so only the head is read. A
+/// WAV is the exception: its tags follow the audio, so its chunk table is walked.
 const HEAD_BYTES: u64 = 262_144;
+/// The largest tag chunk worth reading from a WAV: a cover is the only thing here that
+/// grows, and no audio ever lives in one.
+const MAX_TAG_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -235,6 +239,7 @@ fn flac(bytes: &[u8]) -> Option<Tags> {
 
 /// One RIFF chunk body at a time: name, length, and where the next one starts.
 /// Chunks are word aligned, so an odd body is followed by one pad byte.
+#[cfg(test)]
 fn riff_chunks(bytes: &[u8]) -> Vec<(&[u8], &[u8])> {
     let mut chunks = Vec::new();
     let mut offset = 12;
@@ -249,14 +254,12 @@ fn riff_chunks(bytes: &[u8]) -> Vec<(&[u8], &[u8])> {
         let start = offset + 8;
         let stop = start.saturating_add(size).min(bytes.len());
         chunks.push((id, &bytes[start..stop]));
-        if id == b"data" {
-            break;
-        }
         offset = stop + (size & 1);
     }
     chunks
 }
 
+#[cfg(test)]
 fn is_riff(bytes: &[u8]) -> bool {
     bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE"
 }
@@ -309,21 +312,9 @@ fn info_text(bytes: &[u8]) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-/// A WAV's own tags: `LIST`/`INFO` first, then an embedded ID3v2 tag, which is where
-/// a cover lives because RIFF has no chunk for one.
-fn riff_tags(bytes: &[u8]) -> Option<Tags> {
-    if !is_riff(bytes) {
-        return None;
-    }
-    let mut info = None;
-    let mut id3 = None;
-    for (id, body) in riff_chunks(bytes) {
-        match id {
-            b"LIST" => info = info.or_else(|| riff_info(body)),
-            b"id3 " | b"ID3 " => id3 = id3.or_else(|| id3v2(body)),
-            _ => {}
-        }
-    }
+/// What a RIFF says about itself: the `LIST`/`INFO` fields, and the ID3v2 tag that is
+/// where a cover lives because RIFF has no chunk for one.
+fn merge_tags(info: Option<Tags>, id3: Option<Tags>) -> Option<Tags> {
     match (info, id3) {
         (Some(mut info), Some(id3)) => {
             info.title = info.title.or(id3.title);
@@ -337,7 +328,66 @@ fn riff_tags(bytes: &[u8]) -> Option<Tags> {
     }
 }
 
+/// A RIFF's chunk table, walked with seeks rather than read: a `data` chunk is stepped
+/// over by its declared length, so a file of any size costs only its tags.
+///
+/// This is what makes a WAV's tags findable when they follow the audio, which is the
+/// only place Windows reads them from.
+struct RiffMeta {
+    info: Option<Tags>,
+    id3: Option<Vec<u8>>,
+}
+
+fn riff_meta<R: std::io::Read + std::io::Seek>(reader: &mut R) -> Option<RiffMeta> {
+    use std::io::SeekFrom;
+    let mut header = [0u8; 12];
+    reader.read_exact(&mut header).ok()?;
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut meta = RiffMeta { info: None, id3: None };
+    let mut chunk = [0u8; 8];
+    while reader.read_exact(&mut chunk).is_ok() {
+        let id = [chunk[0], chunk[1], chunk[2], chunk[3]];
+        let size = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]) as u64;
+        let wanted = size <= MAX_TAG_BYTES && matches!(&id, b"LIST" | b"id3 " | b"ID3 ");
+        if wanted {
+            let mut body = vec![0u8; size as usize];
+            if reader.read_exact(&mut body).is_err() {
+                break;
+            }
+            match &id {
+                b"LIST" => meta.info = meta.info.or_else(|| riff_info(&body)),
+                _ if meta.id3.is_none() => meta.id3 = Some(body),
+                _ => {}
+            }
+        } else if reader.seek(SeekFrom::Current(size as i64)).is_err() {
+            break;
+        }
+        // Chunks are word aligned: an odd body is followed by one pad byte.
+        if size % 2 == 1 && reader.seek(SeekFrom::Current(1)).is_err() {
+            break;
+        }
+    }
+    Some(meta)
+}
+
+/// A WAV's tags read from the file itself, which is the only way to reach a tag that
+/// sits after the audio.
+fn riff_tags_at(path: &Path) -> Option<Tags> {
+    let mut file = fs::File::open(path).ok()?;
+    let meta = riff_meta(&mut file)?;
+    merge_tags(meta.info, meta.id3.as_deref().and_then(id3v2))
+}
+
 /// The embedded ID3v2 tag of a RIFF file, for the cover reader.
+pub(crate) fn riff_id3_at(path: &Path) -> Option<Vec<u8>> {
+    let mut file = fs::File::open(path).ok()?;
+    riff_meta(&mut file)?.id3
+}
+
+/// The embedded ID3v2 tag of RIFF bytes, for a caller that already has the file.
+#[cfg(test)]
 pub(crate) fn riff_id3(bytes: &[u8]) -> Option<&[u8]> {
     if !is_riff(bytes) {
         return None;
@@ -412,14 +462,18 @@ fn apic_picture(body: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn read_tags(path: &Path) -> Option<Tags> {
+    let extension = extension_of(path);
+    // A WAV's tags follow its audio, so its chunk table is walked instead of read.
+    if extension == "wav" {
+        return riff_tags_at(path);
+    }
     let bytes = read_head(path)?;
-    match extension_of(path).as_str() {
+    match extension.as_str() {
         "mp3" => id3v2(&bytes).or_else(|| {
             let tail = fs::read(path).ok()?;
             id3v1(&tail)
         }),
         "flac" => flac(&bytes),
-        "wav" => riff_tags(&bytes),
         _ => None,
     }
 }

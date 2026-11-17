@@ -258,8 +258,16 @@ A master keeps the description of the file it came from, read from that file rat
 from what the page displays: a `LIST`/`INFO` chunk carries title, artist, album and the
 writing application, and when the source had a cover an `id3 ` chunk carries it as a
 front-cover `APIC` frame — RIFF has no picture chunk, so an embedded ID3v2 tag is the only
-in-file convention for one. Both sit before `data`. `library.rs` reads the same chunks
-back, which is why a scanned master shows its title and artist instead of its file name.
+in-file convention for one. Both sit *after* `data`, and that placement is load-bearing:
+Windows' WAV property handler reads a `LIST`/`INFO` chunk only when it follows the audio,
+so a master whose tags sit before it shows an empty Title, Contributing artists and Album
+in Explorer even though the chunks are present. Measured by writing the same master in six
+layouts and reading each back through the shell's own property store: before `data` →
+nothing; after `data` → title, artist and album. `library.rs` therefore walks a WAV's chunk
+table with seeks, stepping over the audio by its declared length rather than reading a
+head, and reads the same chunks back — which is why a scanned master shows its title and
+artist instead of its file name, and why `artwork` can still find a cover that lives past
+the audio.
 
 A FLAC master carries the same description as Vorbis comments (`TITLE`, `ARTIST`, `ALBUM`,
 `ENCODER`) and the cover as a front-cover `PICTURE` block, both as metadata blocks before

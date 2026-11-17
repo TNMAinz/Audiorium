@@ -58,11 +58,10 @@ fn extension(path: &Path) -> String {
 }
 
 /// A WAV's own cover: the APIC frame of the ID3v2 tag the exporter writes, because
-/// RIFF has no chunk for a picture. The tag sits before `data`, so the head is enough.
+/// RIFF has no chunk for a picture. The tag follows the audio, so the chunk table is
+/// walked rather than the head read.
 fn riff_cover(path: &Path) -> Option<Vec<u8>> {
-    let mut head = Vec::new();
-    File::open(path).ok()?.take(READ_BUDGET as u64).read_to_end(&mut head).ok()?;
-    crate::library::id3v2_picture(crate::library::riff_id3(&head)?)
+    crate::library::id3v2_picture(&crate::library::riff_id3_at(path)?)
 }
 
 /// The cover exactly as the file carries it, with what that data is.

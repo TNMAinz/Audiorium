@@ -13,8 +13,10 @@
 //! A master also carries the description of the file it was made from: a `LIST`/`INFO`
 //! chunk for title, artist and album, and an `id3 ` chunk when the source had a cover,
 //! because RIFF has no picture chunk and an ID3v2 tag inside a WAV is the only in-file
-//! convention that carries one. Both chunks sit before `data`, so a player that skips
-//! them never seeks past the audio to find it.
+//! convention that carries one. Both chunks sit *after* `data`: Windows reads a WAV's
+//! `LIST`/`INFO` only when it follows the audio, and a file whose tags sit before it
+//! shows an empty Title, Contributing artists and Album in Explorer whichever way the
+//! file was written. Players that scan the whole chunk table find them here as well.
 
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -339,8 +341,10 @@ pub struct WavWriter {
     data_bytes: u64,
     /// Where in the file the `data` chunk's length is written when the render ends.
     data_size_at: u64,
-    /// How long the header turned out, which depends on the chunks the tags ask for.
+    /// How long the header turned out: format and `data`, never the tags.
     header_bytes: u64,
+    /// The tag chunks, held until the audio is written so they land after it.
+    tail: Vec<u8>,
 }
 
 impl WavWriter {
@@ -379,6 +383,7 @@ impl WavWriter {
             data_bytes: 0,
             data_size_at: 0,
             header_bytes: 0,
+            tail: Vec::new(),
         };
         writer.write_header(tags)?;
         Ok(writer)
@@ -386,7 +391,8 @@ impl WavWriter {
 
     /// The header, with both lengths left at zero until `finish` knows them. The fmt
     /// chunk always comes first so a reader that stops at the first unknown chunk still
-    /// finds the format; the tags follow, then `data`.
+    /// finds the format, and `data` follows it at once: the tags are built here and
+    /// written after the audio, which is where Windows looks for them.
     fn write_header(&mut self, tags: &Tags) -> Result<(), String> {
         let block_align = CHANNELS * self.depth.bytes();
         let byte_rate = self.rate * block_align as u32;
@@ -405,10 +411,10 @@ impl WavWriter {
         header.extend_from_slice(&chunk(b"fmt ", &fmt));
         if !tags.is_empty() {
             if let Some(body) = info_body(tags) {
-                header.extend_from_slice(&chunk(b"LIST", &body));
+                self.tail.extend_from_slice(&chunk(b"LIST", &body));
             }
             if let Some(body) = id3_body(tags) {
-                header.extend_from_slice(&chunk(b"id3 ", &body));
+                self.tail.extend_from_slice(&chunk(b"id3 ", &body));
             }
         }
         header.extend_from_slice(b"data");
@@ -472,14 +478,23 @@ impl WavWriter {
     /// The lengths are known now, so they are written where the header left blanks.
     pub fn finish(mut self) -> Result<u64, String> {
         self.flush_staged()?;
+        // The tags follow the audio, so Windows reads them; a player that scans the
+        // chunk table finds them there too.
+        let tail = self.tail.len() as u64;
+        if !self.tail.is_empty() {
+            let tags = std::mem::take(&mut self.tail);
+            self.file
+                .write_all(&tags)
+                .map_err(|error| format!("Cannot write that file: {error}"))?;
+        }
         // The buffer has to reach the file before a seek can put the lengths behind it.
         self.file
             .flush()
             .map_err(|error| format!("Cannot finish that file: {error}"))?;
-        if self.header_bytes + self.data_bytes - 8 > u32::MAX as u64 {
+        if self.header_bytes + self.data_bytes + tail - 8 > u32::MAX as u64 {
             return Err("That render is longer than a WAV file can hold".into());
         }
-        let riff = (self.header_bytes - 8 + self.data_bytes) as u32;
+        let riff = (self.header_bytes - 8 + self.data_bytes + tail) as u32;
         let data = self.data_bytes as u32;
         let data_size_at = self.data_size_at;
         let file = self.file.get_mut();
@@ -491,7 +506,7 @@ impl WavWriter {
         self.file
             .flush()
             .map_err(|error| format!("Cannot finish that file: {error}"))?;
-        Ok(self.header_bytes + self.data_bytes)
+        Ok(self.header_bytes + self.data_bytes + tail)
     }
 }
 
@@ -1095,11 +1110,17 @@ mod tests {
         assert!(bytes.windows(4).any(|window| window == b"APIC"));
         assert!(bytes.windows(9).any(|window| window == b"image/png"));
         assert!(bytes.windows(cover.len()).any(|window| window == cover.as_slice()), "the cover bytes are not in the file");
-        // The audio still starts where the header says, and the lengths describe it.
+        // The tags follow the audio: that is the only place Windows reads a WAV's
+        // `LIST`/`INFO` from, and a file whose tags sit before `data` shows no title in
+        // Explorer whichever way it was written.
         let data_at = bytes.windows(4).position(|window| window == b"data").unwrap();
         let data_len = u32_at(&bytes, data_at + 4) as usize;
-        assert_eq!(data_len, bytes.len() - data_at - 8, "the data chunk does not describe the audio");
+        let tags_at = data_at + 8 + data_len + (data_len & 1);
+        assert_eq!(&bytes[tags_at..tags_at + 4], b"LIST", "the INFO chunk must follow the audio");
+        // The lengths still describe everything after them.
         assert_eq!(u32_at(&bytes, 4) as usize, bytes.len() - 8, "the RIFF length is wrong");
+        let riff_end = 8 + u32_at(&bytes, 4) as usize;
+        assert_eq!(riff_end, bytes.len(), "the RIFF length does not cover the tags");
     }
 
     #[test]
